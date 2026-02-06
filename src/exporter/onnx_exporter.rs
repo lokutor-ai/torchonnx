@@ -397,4 +397,27 @@ mod tests {
         assert!(result.is_ok());
         assert!(file_path.exists());
     }
+
+    #[test]
+    fn test_export_gemm_model() {
+        let mut ir = ModelIR::new();
+        
+        let mut attrs = HashMap::new();
+        attrs.insert("transB".to_string(), crate::ir::Attribute::Int(1));
+
+        ir.nodes.push(Node {
+            name: "gemm1".to_string(),
+            op_type: "Gemm".to_string(),
+            inputs: vec!["A".to_string(), "W".to_string(), "B".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("model.onnx");
+        
+        let result = OnnxExporter::export(&ir, &file_path);
+        assert!(result.is_ok());
+        assert!(file_path.exists());
+    }
 }
