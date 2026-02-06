@@ -16,7 +16,7 @@ impl OptimizationPass for ConstantFolding {
                 }
             }
 
-            if all_constants && (node.op_type == "Add" || node.op_type == "Sub" || node.op_type == "Mul") {
+            if all_constants && (node.op_type == "Add" || node.op_type == "Sub" || node.op_type == "Mul" || node.op_type == "Div") {
                 let a = &ir.weights[&node.inputs[0]];
                 let b = &ir.weights[&node.inputs[1]];
 
@@ -40,8 +40,10 @@ impl OptimizationPass for ConstantFolding {
                             res_data.push(a_data[j] + b_data[j]);
                         } else if node.op_type == "Sub" {
                             res_data.push(a_data[j] - b_data[j]);
-                        } else {
+                        } else if node.op_type == "Mul" {
                             res_data.push(a_data[j] * b_data[j]);
+                        } else {
+                            res_data.push(a_data[j] / b_data[j]);
                         }
                     }
 
@@ -176,5 +178,41 @@ mod tests {
         let res_w = &ir.weights["C"];
         let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
         assert!((res_data - 6.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_basic_div() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 64, 64]), // 3.0
+        });
+        
+        ir.weights.insert("B".to_string(), Tensor {
+            name: "B".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 64]), // 2.0
+        });
+
+        ir.nodes.push(Node {
+            name: "div".to_string(),
+            op_type: "Div".to_string(),
+            inputs: vec!["A".to_string(), "B".to_string()],
+            outputs: vec!["C".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("C"));
+        let res_w = &ir.weights["C"];
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 1.5).abs() < 1e-4);
     }
 }
