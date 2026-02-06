@@ -190,6 +190,43 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "MaxPool" => {
+                    let shape_x = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let kernel_shape = match node.attributes.get("kernel_shape") {
+                        Some(crate::ir::Attribute::Ints(k)) => k.clone(),
+                        _ => vec![1, 1],
+                    };
+                    let strides = match node.attributes.get("strides") {
+                        Some(crate::ir::Attribute::Ints(s)) => s.clone(),
+                        _ => vec![1, 1],
+                    };
+                    let pads = match node.attributes.get("pads") {
+                        Some(crate::ir::Attribute::Ints(p)) => p.clone(),
+                        _ => vec![0, 0, 0, 0],
+                    };
+
+                    let n = shape_x[0];
+                    let c = shape_x[1];
+                    let h_in = shape_x[2];
+                    let w_in = shape_x[3];
+                    let k_h = kernel_shape[0] as usize;
+                    let k_w = kernel_shape[1] as usize;
+
+                    let h_out = (h_in + pads[0] as usize + pads[2] as usize - k_h) / strides[0] as usize + 1;
+                    let w_out = (w_in + pads[1] as usize + pads[3] as usize - k_w) / strides[1] as usize + 1;
+
+                    let output_shape = vec![n, c, h_out, w_out];
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "BatchNormalization" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -603,19 +640,279 @@ mod tests {
 
         
 
-                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
         
 
-                        assert_eq!(y_shape, Some(&vec![1, 16, 112, 112]));
+                
 
         
 
-                    }
+                                assert_eq!(y_shape, Some(&vec![1, 16, 112, 112]));
 
         
 
-                }
+                
+
+        
+
+                            }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                            #[test]
+
+        
+
+                
+
+        
+
+                            fn test_infer_max_pool_shape() {
+
+        
+
+                
+
+        
+
+                                let mut ir = ModelIR::new();
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                                ir.inputs.push(Tensor {
+
+        
+
+                
+
+        
+
+                                    name: "X".to_string(),
+
+        
+
+                
+
+        
+
+                                    shape: vec![1, 16, 112, 112],
+
+        
+
+                
+
+        
+
+                                    data_type: DataType::F32,
+
+        
+
+                
+
+        
+
+                                    data: None,
+
+        
+
+                
+
+        
+
+                                });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                let mut attrs = HashMap::new();
+
+        
+
+                
+
+        
+
+                                attrs.insert("kernel_shape".to_string(), crate::ir::Attribute::Ints(vec![2, 2]));
+
+        
+
+                
+
+        
+
+                                attrs.insert("strides".to_string(), crate::ir::Attribute::Ints(vec![2, 2]));
+
+        
+
+                
+
+        
+
+                                attrs.insert("pads".to_string(), crate::ir::Attribute::Ints(vec![0, 0, 0, 0]));
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                ir.nodes.push(Node {
+
+        
+
+                
+
+        
+
+                                    name: "pool1".to_string(),
+
+        
+
+                
+
+        
+
+                                    op_type: "MaxPool".to_string(),
+
+        
+
+                
+
+        
+
+                                    inputs: vec!["X".to_string()],
+
+        
+
+                
+
+        
+
+                                    outputs: vec!["Y".to_string()],
+
+        
+
+                
+
+        
+
+                                    attributes: attrs,
+
+        
+
+                
+
+        
+
+                                });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                ShapeInference::infer(&mut ir).unwrap();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+        
+
+                
+
+        
+
+                                assert_eq!(y_shape, Some(&vec![1, 16, 56, 56]));
+
+        
+
+                
+
+        
+
+                            }
+
+        
+
+                
+
+        
+
+                        }
+
+        
+
+                
+
+        
+
+                        
 
         
 
