@@ -36,3 +36,30 @@ impl ModelLoader for PytorchLoader {
         Err(LoaderError::Other("Reconstruction from Pickle not yet implemented".to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use zip::write::FileOptions;
+    use std::io::Write;
+
+    #[test]
+    fn test_load_pt_archive_found() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("model.pt");
+        let file = File::create(&file_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+
+        zip.start_file("archive/data.pkl", FileOptions::default()).unwrap();
+        let pickle_data = serde_pickle::to_vec(&vec![1, 2, 3], serde_pickle::SerOptions::default()).unwrap();
+        zip.write_all(&pickle_data).unwrap();
+        zip.finish().unwrap();
+
+        let result = PytorchLoader::load(&file_path);
+        match result {
+            Err(LoaderError::Other(s)) => assert_eq!(s, "Reconstruction from Pickle not yet implemented"),
+            _ => panic!("Expected Reconstruction error, got {:?}", result),
+        }
+    }
+}
