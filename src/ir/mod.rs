@@ -43,6 +43,8 @@ pub struct ModelIR {
     pub outputs: Vec<Tensor>,
 }
 
+pub mod shape_inference;
+
 impl ModelIR {
     pub fn new() -> Self {
         Self {

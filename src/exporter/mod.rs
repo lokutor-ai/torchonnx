@@ -2,6 +2,8 @@ pub mod onnx {
     include!("onnx.rs");
 }
 
+pub mod onnx_exporter;
+
 use crate::ir::ModelIR;
 use thiserror::Error;
 
