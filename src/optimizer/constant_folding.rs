@@ -300,6 +300,57 @@ impl OptimizationPass for ConstantFolding {
                     ir.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Concat" {
+                let axis = match node.attributes.get("axis") {
+                    Some(crate::ir::Attribute::Int(ax)) => *ax as i64,
+                    _ => 0,
+                };
+
+                let first_shape = &ir.weights[&node.inputs[0]].shape;
+                let axis = if axis < 0 { (first_shape.len() as i64 + axis) as usize } else { axis as usize };
+
+                let mut output_shape = first_shape.clone();
+                output_shape[axis] = 0;
+                for input_name in &node.inputs {
+                    output_shape[axis] += ir.weights[input_name].shape[axis];
+                }
+
+                let mut outer_size = 1;
+                for j in 0..axis { outer_size *= output_shape[j]; }
+                let mut inner_size = 1;
+                for j in axis + 1..output_shape.len() { inner_size *= output_shape[j]; }
+
+                let mut res_data = vec![0u8; 0];
+                let mut total_elements = 1;
+                for &d in &output_shape { total_elements *= d; }
+                res_data.resize(total_elements * 4, 0); // Assuming F32
+
+                let mut current_axis_offset = 0;
+                for input_name in &node.inputs {
+                    let weight = &ir.weights[input_name];
+                    let input_axis_size = weight.shape[axis];
+                    let input_data = weight.data.as_ref().unwrap();
+
+                    for outer in 0..outer_size {
+                        let src_start = outer * input_axis_size * inner_size * 4;
+                        let src_end = src_start + input_axis_size * inner_size * 4;
+                        let dest_start = (outer * output_shape[axis] * inner_size + current_axis_offset * inner_size) * 4;
+                        let dest_end = dest_start + input_axis_size * inner_size * 4;
+                        res_data[dest_start..dest_end].copy_from_slice(&input_data[src_start..src_end]);
+                    }
+                    current_axis_offset += input_axis_size;
+                }
+
+                let output_name = node.outputs[0].clone();
+                ir.weights.insert(output_name.clone(), Tensor {
+                    name: output_name,
+                    shape: output_shape,
+                    data_type: DataType::F32,
+                    data: Some(res_data),
+                });
+
+                ir.nodes.remove(i);
+                continue;
             }
             i += 1;
         }
@@ -632,5 +683,50 @@ mod tests {
         let res_w = &ir.weights["Y"];
         let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
         assert!((res_data - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_concat() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1, 2],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63, 0, 0, 0, 64]), // [1.0, 2.0]
+        });
+
+        ir.weights.insert("B".to_string(), Tensor {
+            name: "B".to_string(),
+            shape: vec![1, 2],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 64, 64, 0, 0, 128, 64]), // [3.0, 4.0]
+        });
+
+        let mut attrs = HashMap::new();
+        attrs.insert("axis".to_string(), crate::ir::Attribute::Int(1));
+
+        ir.nodes.push(Node {
+            name: "concat".to_string(),
+            op_type: "Concat".to_string(),
+            inputs: vec!["A".to_string(), "B".to_string()],
+            outputs: vec!["C".to_string()],
+            attributes: attrs,
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("C"));
+        assert_eq!(ir.weights["C"].shape, vec![1, 4]);
+        let res_w = &ir.weights["C"];
+        let res_data: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(
+                res_w.data.as_ref().unwrap().as_ptr() as *const f32,
+                4,
+            ).to_vec()
+        };
+        assert_eq!(res_data, vec![1.0, 2.0, 3.0, 4.0]);
     }
 }
