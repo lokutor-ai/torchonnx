@@ -354,4 +354,24 @@ mod tests {
         assert!(result.is_ok());
         assert!(file_path.exists());
     }
+
+    #[test]
+    fn test_export_global_average_pool_model() {
+        let mut ir = ModelIR::new();
+        
+        ir.nodes.push(Node {
+            name: "gap1".to_string(),
+            op_type: "GlobalAveragePool".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("model.onnx");
+        
+        let result = OnnxExporter::export(&ir, &file_path);
+        assert!(result.is_ok());
+        assert!(file_path.exists());
+    }
 }
