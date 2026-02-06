@@ -153,4 +153,27 @@ mod tests {
         assert!(result.is_ok());
         assert!(file_path.exists());
     }
+
+    #[test]
+    fn test_export_transpose_model() {
+        let mut ir = ModelIR::new();
+        
+        let mut attrs = HashMap::new();
+        attrs.insert("perm".to_string(), crate::ir::Attribute::Ints(vec![0, 2, 1]));
+
+        ir.nodes.push(Node {
+            name: "transpose1".to_string(),
+            op_type: "Transpose".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("model.onnx");
+        
+        let result = OnnxExporter::export(&ir, &file_path);
+        assert!(result.is_ok());
+        assert!(file_path.exists());
+    }
 }
