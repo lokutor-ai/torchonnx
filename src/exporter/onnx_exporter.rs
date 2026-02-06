@@ -240,4 +240,28 @@ mod tests {
         assert!(result.is_ok());
         assert!(file_path.exists());
     }
+
+    #[test]
+    fn test_export_max_pool_model() {
+        let mut ir = ModelIR::new();
+        
+        let mut attrs = HashMap::new();
+        attrs.insert("kernel_shape".to_string(), crate::ir::Attribute::Ints(vec![2, 2]));
+        attrs.insert("strides".to_string(), crate::ir::Attribute::Ints(vec![2, 2]));
+
+        ir.nodes.push(Node {
+            name: "pool1".to_string(),
+            op_type: "MaxPool".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("model.onnx");
+        
+        let result = OnnxExporter::export(&ir, &file_path);
+        assert!(result.is_ok());
+        assert!(file_path.exists());
+    }
 }
