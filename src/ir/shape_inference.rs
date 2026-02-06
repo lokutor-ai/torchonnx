@@ -298,6 +298,31 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Flatten" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let axis = match node.attributes.get("axis") {
+                        Some(crate::ir::Attribute::Int(ax)) => *ax as i64,
+                        _ => 1,
+                    };
+                    let axis = if axis < 0 { (shape.len() as i64 + axis) as usize } else { axis as usize };
+
+                    let mut dim0 = 1;
+                    for i in 0..axis { dim0 *= shape[i]; }
+                    let mut dim1 = 1;
+                    for i in axis..shape.len() { dim1 *= shape[i]; }
+
+                    let output_shape = vec![dim0, dim1];
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
