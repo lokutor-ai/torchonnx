@@ -196,4 +196,28 @@ mod tests {
         assert!(result.is_ok());
         assert!(file_path.exists());
     }
+
+    #[test]
+    fn test_export_conv_model() {
+        let mut ir = ModelIR::new();
+        
+        let mut attrs = HashMap::new();
+        attrs.insert("strides".to_string(), crate::ir::Attribute::Ints(vec![1, 1]));
+        attrs.insert("pads".to_string(), crate::ir::Attribute::Ints(vec![0, 0, 0, 0]));
+
+        ir.nodes.push(Node {
+            name: "conv1".to_string(),
+            op_type: "Conv".to_string(),
+            inputs: vec!["X".to_string(), "W".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("model.onnx");
+        
+        let result = OnnxExporter::export(&ir, &file_path);
+        assert!(result.is_ok());
+        assert!(file_path.exists());
+    }
 }
