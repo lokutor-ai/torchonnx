@@ -16,7 +16,7 @@ impl OptimizationPass for ConstantFolding {
                 }
             }
 
-            if all_constants && node.op_type == "Add" {
+            if all_constants && (node.op_type == "Add" || node.op_type == "Sub") {
                 let a = &ir.weights[&node.inputs[0]];
                 let b = &ir.weights[&node.inputs[1]];
 
@@ -36,7 +36,11 @@ impl OptimizationPass for ConstantFolding {
 
                     let mut res_data = Vec::with_capacity(a_data.len());
                     for j in 0..a_data.len() {
-                        res_data.push(a_data[j] + b_data[j]);
+                        if node.op_type == "Add" {
+                            res_data.push(a_data[j] + b_data[j]);
+                        } else {
+                            res_data.push(a_data[j] - b_data[j]);
+                        }
                     }
 
                     let res_bytes: Vec<u8> = unsafe {
@@ -91,6 +95,39 @@ mod tests {
         ir.nodes.push(Node {
             name: "add".to_string(),
             op_type: "Add".to_string(),
+            inputs: vec!["A".to_string(), "B".to_string()],
+            outputs: vec!["C".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("C"));
+    }
+
+    #[test]
+    fn test_constant_folding_basic_sub() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 64]), // 2.0
+        });
+        
+        ir.weights.insert("B".to_string(), Tensor {
+            name: "B".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63]), // 1.0
+        });
+
+        ir.nodes.push(Node {
+            name: "sub".to_string(),
+            op_type: "Sub".to_string(),
             inputs: vec!["A".to_string(), "B".to_string()],
             outputs: vec!["C".to_string()],
             attributes: HashMap::new(),
