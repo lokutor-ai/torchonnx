@@ -351,6 +351,53 @@ impl OptimizationPass for ConstantFolding {
 
                 ir.nodes.remove(i);
                 continue;
+            } else if all_constants && node.op_type == "GlobalAveragePool" {
+                let a = &ir.weights[&node.inputs[0]];
+                if a.data_type == DataType::F32 && a.shape.len() >= 2 {
+                    let a_data: &[f32] = unsafe {
+                        std::slice::from_raw_parts(
+                            a.data.as_ref().unwrap().as_ptr() as *const f32,
+                            a.data.as_ref().unwrap().len() / 4,
+                        )
+                    };
+
+                    let n = a.shape[0];
+                    let c = a.shape[1];
+                    let mut spatial_size = 1;
+                    for j in 2..a.shape.len() { spatial_size *= a.shape[j]; }
+
+                    let mut res_data = vec![0.0f32; n * c];
+                    for i_n in 0..n {
+                        for i_c in 0..c {
+                            let mut sum = 0.0f32;
+                            for i_s in 0..spatial_size {
+                                sum += a_data[(i_n * c + i_c) * spatial_size + i_s];
+                            }
+                            res_data[i_n * c + i_c] = sum / spatial_size as f32;
+                        }
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let mut output_shape = vec![n, c];
+                    for _ in 2..a.shape.len() { output_shape.push(1); }
+
+                    let output_name = node.outputs[0].clone();
+                    ir.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.nodes.remove(i);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -728,5 +775,35 @@ mod tests {
             ).to_vec()
         };
         assert_eq!(res_data, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_constant_folding_global_average_pool() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1, 1, 2, 2],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64]), // [1.0, 2.0, 3.0, 4.0]
+        });
+
+        ir.nodes.push(Node {
+            name: "gap".to_string(),
+            op_type: "GlobalAveragePool".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("B"));
+        assert_eq!(ir.weights["B"].shape, vec![1, 1, 1, 1]);
+        let res_w = &ir.weights["B"];
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 2.5).abs() < 1e-4);
     }
 }
