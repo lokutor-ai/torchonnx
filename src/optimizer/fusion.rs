@@ -26,6 +26,26 @@ impl OptimizationPass for OperatorFusion {
                     ir.nodes.remove(bn_idx);
                     continue;
                 }
+            } else if ir.nodes[i].op_type == "Add" {
+                let add_output = ir.nodes[i].outputs[0].clone();
+                
+                let mut next_node_idx = None;
+                for j in 0..ir.nodes.len() {
+                    if i != j && ir.nodes[j].op_type == "Relu" && ir.nodes[j].inputs[0] == add_output {
+                        next_node_idx = Some(j);
+                        break;
+                    }
+                }
+
+                if let Some(relu_idx) = next_node_idx {
+                    let relu_output = ir.nodes[relu_idx].outputs[0].clone();
+                    
+                    ir.nodes[i].op_type = "FusedAddRelu".to_string();
+                    ir.nodes[i].outputs[0] = relu_output;
+                    
+                    ir.nodes.remove(relu_idx);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -64,6 +84,34 @@ mod tests {
 
         assert_eq!(ir.nodes.len(), 1);
         assert_eq!(ir.nodes[0].op_type, "Conv");
+        assert_eq!(ir.nodes[0].outputs[0], "Y");
+    }
+
+    #[test]
+    fn test_fuse_add_relu() {
+        let mut ir = ModelIR::new();
+        
+        ir.nodes.push(Node {
+            name: "add".to_string(),
+            op_type: "Add".to_string(),
+            inputs: vec!["A".to_string(), "B".to_string()],
+            outputs: vec!["add_out".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        ir.nodes.push(Node {
+            name: "relu".to_string(),
+            op_type: "Relu".to_string(),
+            inputs: vec!["add_out".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let fusion = OperatorFusion;
+        fusion.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes[0].op_type, "FusedAddRelu");
         assert_eq!(ir.nodes[0].outputs[0], "Y");
     }
 }
