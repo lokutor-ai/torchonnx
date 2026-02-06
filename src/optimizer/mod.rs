@@ -11,6 +11,8 @@ pub trait OptimizationPass {
     fn apply(&self, ir: &mut ModelIR) -> Result<(), OptimizerError>;
 }
 
+pub mod dce;
+
 pub struct Optimizer {
     passes: Vec<Box<dyn OptimizationPass>>,
 }
