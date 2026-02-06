@@ -130,6 +130,69 @@ impl OptimizationPass for ConstantFolding {
                     ir.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Softmax" {
+                let a = &ir.weights[&node.inputs[0]];
+                if a.data_type == DataType::F32 {
+                    let axis = match node.attributes.get("axis") {
+                        Some(crate::ir::Attribute::Int(ax)) => *ax as i64,
+                        _ => -1,
+                    };
+                    let axis = if axis < 0 { (a.shape.len() as i64 + axis) as usize } else { axis as usize };
+
+                    let a_data: &[f32] = unsafe {
+                        std::slice::from_raw_parts(
+                            a.data.as_ref().unwrap().as_ptr() as *const f32,
+                            a.data.as_ref().unwrap().len() / 4,
+                        )
+                    };
+
+                    let mut res_data = vec![0.0f32; a_data.len()];
+                    let mut outer_size = 1;
+                    for j in 0..axis { outer_size *= a.shape[j]; }
+                    let axis_size = a.shape[axis];
+                    let mut inner_size = 1;
+                    for j in axis + 1..a.shape.len() { inner_size *= a.shape[j]; }
+
+                    for outer in 0..outer_size {
+                        for inner in 0..inner_size {
+                            let mut max_val = f32::NEG_INFINITY;
+                            for k in 0..axis_size {
+                                let idx = outer * axis_size * inner_size + k * inner_size + inner;
+                                if a_data[idx] > max_val { max_val = a_data[idx]; }
+                            }
+
+                            let mut sum_exp = 0.0f32;
+                            for k in 0..axis_size {
+                                let idx = outer * axis_size * inner_size + k * inner_size + inner;
+                                res_data[idx] = (a_data[idx] - max_val).exp();
+                                sum_exp += res_data[idx];
+                            }
+
+                            for k in 0..axis_size {
+                                let idx = outer * axis_size * inner_size + k * inner_size + inner;
+                                res_data[idx] /= sum_exp;
+                            }
+                        }
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let output_name = node.outputs[0].clone();
+                    ir.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: a.shape.clone(),
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.nodes.remove(i);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -309,5 +372,38 @@ mod tests {
         assert_eq!(ir.nodes.len(), 0);
         assert!(ir.weights.contains_key("B"));
         assert_eq!(ir.weights["B"].shape, vec![3, 2]);
+    }
+
+    #[test]
+    fn test_constant_folding_softmax() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1, 2],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 0, 0, 0, 0, 0]), // [0.0, 0.0]
+        });
+
+        ir.nodes.push(Node {
+            name: "softmax".to_string(),
+            op_type: "Softmax".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("B"));
+        let res_w = &ir.weights["B"];
+        let res_data: [f32; 2] = [
+            f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap()),
+            f32::from_le_bytes(res_w.data.as_ref().unwrap()[4..8].try_into().unwrap()),
+        ];
+        assert!((res_data[0] - 0.5).abs() < 1e-4);
+        assert!((res_data[1] - 0.5).abs() < 1e-4);
     }
 }
