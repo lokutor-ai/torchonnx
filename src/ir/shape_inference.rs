@@ -240,6 +240,19 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Softmax" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
+                        .clone();
+
+                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 _ => {}
             }
         }
@@ -880,7 +893,7 @@ mod tests {
 
         
 
-                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
         
 
@@ -888,7 +901,7 @@ mod tests {
 
         
 
-                                assert_eq!(y_shape, Some(&vec![1, 16, 56, 56]));
+                        
 
         
 
@@ -896,7 +909,7 @@ mod tests {
 
         
 
-                            }
+                                        assert_eq!(y_shape, Some(&vec![1, 16, 56, 56]));
 
         
 
@@ -904,7 +917,495 @@ mod tests {
 
         
 
-                        }
+                        
+
+        
+
+                
+
+        
+
+                                    }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                    #[test]
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                    fn test_infer_softmax_shape() {
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        let mut ir = ModelIR::new();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        ir.inputs.push(Tensor {
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            name: "X".to_string(),
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            shape: vec![1, 1000],
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            data_type: DataType::F32,
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            data: None,
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        let mut attrs = HashMap::new();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        attrs.insert("axis".to_string(), crate::ir::Attribute::Int(1));
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        ir.nodes.push(Node {
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            name: "softmax1".to_string(),
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            op_type: "Softmax".to_string(),
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            inputs: vec!["X".to_string()],
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            outputs: vec!["Y".to_string()],
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            attributes: attrs,
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        ShapeInference::infer(&mut ir).unwrap();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        assert_eq!(y_shape, Some(&vec![1, 1000]));
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                    }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
 
         
 
