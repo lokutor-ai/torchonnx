@@ -13,6 +13,7 @@ pub trait OptimizationPass {
 
 pub mod dce;
 pub mod constant_folding;
+pub mod fusion;
 
 pub struct Optimizer {
     passes: Vec<Box<dyn OptimizationPass>>,
