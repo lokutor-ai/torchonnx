@@ -226,6 +226,29 @@ impl OptimizationPass for ConstantFolding {
                     ir.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Reshape" {
+                let a = &ir.weights[&node.inputs[0]];
+                let target_shape_tensor = &ir.weights[&node.inputs[1]];
+                
+                if let Some(target_shape_data) = &target_shape_tensor.data {
+                    let mut output_shape = Vec::new();
+                    for j in 0..target_shape_tensor.shape[0] {
+                        let offset = j * 8;
+                        let val = i64::from_le_bytes(target_shape_data[offset..offset+8].try_into().unwrap());
+                        output_shape.push(val as usize);
+                    }
+
+                    let output_name = node.outputs[0].clone();
+                    ir.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: output_shape,
+                        data_type: a.data_type.clone(),
+                        data: a.data.clone(),
+                    });
+
+                    ir.nodes.remove(i);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -471,5 +494,39 @@ mod tests {
         ];
         assert_eq!(res_data[0], 0.0);
         assert_eq!(res_data[1], 1.0);
+    }
+
+    #[test]
+    fn test_constant_folding_reshape() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1, 6],
+            data_type: DataType::F32,
+            data: Some(vec![0; 24]),
+        });
+
+        ir.weights.insert("shape".to_string(), Tensor {
+            name: "shape".to_string(),
+            shape: vec![2],
+            data_type: DataType::I64,
+            data: Some(vec![2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0]),
+        });
+
+        ir.nodes.push(Node {
+            name: "reshape".to_string(),
+            op_type: "Reshape".to_string(),
+            inputs: vec!["A".to_string(), "shape".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("B"));
+        assert_eq!(ir.weights["B"].shape, vec![2, 3]);
     }
 }
