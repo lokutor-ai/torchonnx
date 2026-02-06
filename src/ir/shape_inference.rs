@@ -155,6 +155,41 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Conv" => {
+                    let shape_x = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    let shape_w = value_shapes.get(&node.inputs[1])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[1])))?;
+
+                    let strides = match node.attributes.get("strides") {
+                        Some(crate::ir::Attribute::Ints(s)) => s.clone(),
+                        _ => vec![1, 1],
+                    };
+                    let pads = match node.attributes.get("pads") {
+                        Some(crate::ir::Attribute::Ints(p)) => p.clone(),
+                        _ => vec![0, 0, 0, 0],
+                    };
+
+                    let n = shape_x[0];
+                    let m = shape_w[0];
+                    let h_in = shape_x[2];
+                    let w_in = shape_x[3];
+                    let k_h = shape_w[2];
+                    let k_w = shape_w[3];
+
+                    let h_out = (h_in + pads[0] as usize + pads[2] as usize - k_h) / strides[0] as usize + 1;
+                    let w_out = (w_in + pads[1] as usize + pads[3] as usize - k_w) / strides[1] as usize + 1;
+
+                    let output_shape = vec![n, m, h_out, w_out];
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 _ => {}
             }
         }
@@ -203,9 +238,161 @@ mod tests {
 
         ShapeInference::infer(&mut ir).unwrap();
 
-                assert_eq!(ir.outputs.len(), 1);
+        assert_eq!(ir.outputs.len(), 1);
+        assert_eq!(ir.outputs[0].shape, vec![1, 3, 224, 224]);
+    }
 
-                assert_eq!(ir.outputs[0].shape, vec![1, 3, 224, 224]);
+    #[test]
+    fn test_infer_relu_shape() {
+        let mut ir = ModelIR::new();
+        
+        ir.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 10],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        ir.nodes.push(Node {
+            name: "relu1".to_string(),
+            op_type: "Relu".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        ShapeInference::infer(&mut ir).unwrap();
+
+        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 10]));
+    }
+
+    #[test]
+    fn test_infer_einsum_dot_product() {
+        let mut ir = ModelIR::new();
+        
+        ir.inputs.push(Tensor {
+            name: "A".to_string(),
+            shape: vec![10],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        ir.inputs.push(Tensor {
+            name: "B".to_string(),
+            shape: vec![10],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        let mut attrs = HashMap::new();
+        attrs.insert("equation".to_string(), crate::ir::Attribute::String("i,i->".to_string()));
+
+        ir.nodes.push(Node {
+            name: "einsum1".to_string(),
+            op_type: "Einsum".to_string(),
+            inputs: vec!["A".to_string(), "B".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+
+        ShapeInference::infer(&mut ir).unwrap();
+
+        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![]));
+    }
+
+    #[test]
+    fn test_infer_matmul_shape() {
+        let mut ir = ModelIR::new();
+        
+        ir.inputs.push(Tensor {
+            name: "A".to_string(),
+            shape: vec![5, 10],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        ir.inputs.push(Tensor {
+            name: "B".to_string(),
+            shape: vec![10, 3],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        ir.nodes.push(Node {
+            name: "matmul1".to_string(),
+            op_type: "MatMul".to_string(),
+            inputs: vec!["A".to_string(), "B".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        ShapeInference::infer(&mut ir).unwrap();
+
+        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![5, 3]));
+    }
+
+    #[test]
+    fn test_infer_transpose_shape() {
+        let mut ir = ModelIR::new();
+        
+        ir.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 2, 3],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        let mut attrs = HashMap::new();
+        attrs.insert("perm".to_string(), crate::ir::Attribute::Ints(vec![0, 2, 1]));
+
+        ir.nodes.push(Node {
+            name: "transpose1".to_string(),
+            op_type: "Transpose".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+
+        ShapeInference::infer(&mut ir).unwrap();
+
+        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 3, 2]));
+    }
+
+    #[test]
+    fn test_infer_reshape_shape() {
+        let mut ir = ModelIR::new();
+        
+        ir.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 6],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        ir.weights.insert("shape".to_string(), Tensor {
+            name: "shape".to_string(),
+            shape: vec![2],
+            data_type: DataType::I64,
+            data: Some(vec![2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0]),
+        });
+
+        ir.nodes.push(Node {
+            name: "reshape1".to_string(),
+            op_type: "Reshape".to_string(),
+            inputs: vec!["X".to_string(), "shape".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        ShapeInference::infer(&mut ir).unwrap();
+
+                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+                assert_eq!(y_shape, Some(&vec![2, 3]));
 
             }
 
@@ -213,7 +400,7 @@ mod tests {
 
             #[test]
 
-            fn test_infer_relu_shape() {
+            fn test_infer_conv2d_shape() {
 
                 let mut ir = ModelIR::new();
 
@@ -223,7 +410,7 @@ mod tests {
 
                     name: "X".to_string(),
 
-                    shape: vec![1, 10],
+                    shape: vec![1, 3, 224, 224],
 
                     data_type: DataType::F32,
 
@@ -233,17 +420,39 @@ mod tests {
 
         
 
+                ir.weights.insert("W".to_string(), Tensor {
+
+                    name: "W".to_string(),
+
+                    shape: vec![16, 3, 3, 3],
+
+                    data_type: DataType::F32,
+
+                    data: None,
+
+                });
+
+        
+
+                let mut attrs = HashMap::new();
+
+                attrs.insert("strides".to_string(), crate::ir::Attribute::Ints(vec![2, 2]));
+
+                attrs.insert("pads".to_string(), crate::ir::Attribute::Ints(vec![1, 1, 1, 1]));
+
+        
+
                 ir.nodes.push(Node {
 
-                    name: "relu1".to_string(),
+                    name: "conv1".to_string(),
 
-                    op_type: "Relu".to_string(),
+                    op_type: "Conv".to_string(),
 
-                    inputs: vec!["X".to_string()],
+                    inputs: vec!["X".to_string(), "W".to_string()],
 
                     outputs: vec!["Y".to_string()],
 
-                    attributes: HashMap::new(),
+                    attributes: attrs,
 
                 });
 
@@ -253,2030 +462,12 @@ mod tests {
 
         
 
-                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
-        
+                assert_eq!(y_shape, Some(&vec![1, 16, 112, 112]));
 
-                        assert_eq!(y_shape, Some(&vec![1, 10]));
+            }
 
-        
-
-                    }
-
-        
-
-                
-
-        
-
-                    #[test]
-
-        
-
-                    fn test_infer_einsum_dot_product() {
-
-        
-
-                        let mut ir = ModelIR::new();
-
-        
-
-                        
-
-        
-
-                        ir.inputs.push(Tensor {
-
-        
-
-                            name: "A".to_string(),
-
-        
-
-                            shape: vec![10],
-
-        
-
-                            data_type: DataType::F32,
-
-        
-
-                            data: None,
-
-        
-
-                        });
-
-        
-
-                
-
-        
-
-                        ir.inputs.push(Tensor {
-
-        
-
-                            name: "B".to_string(),
-
-        
-
-                            shape: vec![10],
-
-        
-
-                            data_type: DataType::F32,
-
-        
-
-                            data: None,
-
-        
-
-                        });
-
-        
-
-                
-
-        
-
-                        let mut attrs = HashMap::new();
-
-        
-
-                        attrs.insert("equation".to_string(), crate::ir::Attribute::String("i,i->".to_string()));
-
-        
-
-                
-
-        
-
-                        ir.nodes.push(Node {
-
-        
-
-                            name: "einsum1".to_string(),
-
-        
-
-                            op_type: "Einsum".to_string(),
-
-        
-
-                            inputs: vec!["A".to_string(), "B".to_string()],
-
-        
-
-                            outputs: vec!["Y".to_string()],
-
-        
-
-                            attributes: attrs,
-
-        
-
-                        });
-
-        
-
-                
-
-        
-
-                        ShapeInference::infer(&mut ir).unwrap();
-
-        
-
-                
-
-        
-
-                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-
-        
-
-                
-
-        
-
-                                assert_eq!(y_shape, Some(&vec![]));
-
-        
-
-                
-
-        
-
-                            }
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                            #[test]
-
-        
-
-                
-
-        
-
-                            fn test_infer_matmul_shape() {
-
-        
-
-                
-
-        
-
-                                let mut ir = ModelIR::new();
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                                ir.inputs.push(Tensor {
-
-        
-
-                
-
-        
-
-                                    name: "A".to_string(),
-
-        
-
-                
-
-        
-
-                                    shape: vec![5, 10],
-
-        
-
-                
-
-        
-
-                                    data_type: DataType::F32,
-
-        
-
-                
-
-        
-
-                                    data: None,
-
-        
-
-                
-
-        
-
-                                });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                ir.inputs.push(Tensor {
-
-        
-
-                
-
-        
-
-                                    name: "B".to_string(),
-
-        
-
-                
-
-        
-
-                                    shape: vec![10, 3],
-
-        
-
-                
-
-        
-
-                                    data_type: DataType::F32,
-
-        
-
-                
-
-        
-
-                                    data: None,
-
-        
-
-                
-
-        
-
-                                });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                ir.nodes.push(Node {
-
-        
-
-                
-
-        
-
-                                    name: "matmul1".to_string(),
-
-        
-
-                
-
-        
-
-                                    op_type: "MatMul".to_string(),
-
-        
-
-                
-
-        
-
-                                    inputs: vec!["A".to_string(), "B".to_string()],
-
-        
-
-                
-
-        
-
-                                    outputs: vec!["Y".to_string()],
-
-        
-
-                
-
-        
-
-                                    attributes: HashMap::new(),
-
-        
-
-                
-
-        
-
-                                });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                ShapeInference::infer(&mut ir).unwrap();
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        assert_eq!(y_shape, Some(&vec![5, 3]));
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                    }
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                    #[test]
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                    fn test_infer_transpose_shape() {
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        let mut ir = ModelIR::new();
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        ir.inputs.push(Tensor {
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            name: "X".to_string(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            shape: vec![1, 2, 3],
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            data_type: DataType::F32,
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            data: None,
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        let mut attrs = HashMap::new();
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        attrs.insert("perm".to_string(), crate::ir::Attribute::Ints(vec![0, 2, 1]));
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        ir.nodes.push(Node {
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            name: "transpose1".to_string(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            op_type: "Transpose".to_string(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            inputs: vec!["X".to_string()],
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            outputs: vec!["Y".to_string()],
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            attributes: attrs,
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        ShapeInference::infer(&mut ir).unwrap();
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                assert_eq!(y_shape, Some(&vec![1, 3, 2]));
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            }
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            #[test]
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            fn test_infer_reshape_shape() {
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                let mut ir = ModelIR::new();
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                ir.inputs.push(Tensor {
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    name: "X".to_string(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    shape: vec![1, 6],
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    data_type: DataType::F32,
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    data: None,
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                ir.weights.insert("shape".to_string(), Tensor {
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    name: "shape".to_string(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    shape: vec![2],
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    data_type: DataType::I64,
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    data: Some(vec![2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0]), // [2, 3] in i64 LE
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                ir.nodes.push(Node {
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    name: "reshape1".to_string(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    op_type: "Reshape".to_string(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    inputs: vec!["X".to_string(), "shape".to_string()],
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    outputs: vec!["Y".to_string()],
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                    attributes: HashMap::new(),
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                });
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                ShapeInference::infer(&mut ir).unwrap();
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                                assert_eq!(y_shape, Some(&vec![2, 3]));
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                            }
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        }
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                        
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
-
-        
-
-                                
-
-        
-
-                
-
-        
-
-                        
-
-        
-
-                
+        }
 
         
