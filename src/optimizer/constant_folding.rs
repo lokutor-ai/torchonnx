@@ -65,6 +65,71 @@ impl OptimizationPass for ConstantFolding {
                     ir.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Transpose" {
+                let a = &ir.weights[&node.inputs[0]];
+                if a.data_type == DataType::F32 {
+                    let perm = match node.attributes.get("perm") {
+                        Some(crate::ir::Attribute::Ints(p)) => p.clone(),
+                        _ => {
+                            let mut p: Vec<i64> = (0..a.shape.len() as i64).collect();
+                            p.reverse();
+                            p
+                        }
+                    };
+
+                    let mut output_shape = Vec::with_capacity(a.shape.len());
+                    for &p in &perm {
+                        output_shape.push(a.shape[p as usize]);
+                    }
+
+                    let a_data: &[f32] = unsafe {
+                        std::slice::from_raw_parts(
+                            a.data.as_ref().unwrap().as_ptr() as *const f32,
+                            a.data.as_ref().unwrap().len() / 4,
+                        )
+                    };
+
+                    let mut res_data = vec![0.0f32; a_data.len()];
+                    let mut strides_a = vec![1; a.shape.len()];
+                    let mut strides_res = vec![1; output_shape.len()];
+                    for j in (0..a.shape.len() - 1).rev() {
+                        strides_a[j] = strides_a[j + 1] * a.shape[j + 1];
+                        strides_res[j] = strides_res[j + 1] * output_shape[j + 1];
+                    }
+
+                    for j in 0..a_data.len() {
+                        let mut remaining = j;
+                        let mut coords_a = vec![0; a.shape.len()];
+                        for k in 0..a.shape.len() {
+                            coords_a[k] = remaining / strides_a[k];
+                            remaining %= strides_a[k];
+                        }
+
+                        let mut res_idx = 0;
+                        for (k, &p) in perm.iter().enumerate() {
+                            res_idx += coords_a[p as usize] * strides_res[k];
+                        }
+                        res_data[res_idx] = a_data[j];
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let output_name = node.outputs[0].clone();
+                    ir.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.nodes.remove(i);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -214,5 +279,35 @@ mod tests {
         let res_w = &ir.weights["C"];
         let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
         assert!((res_data - 1.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_transpose() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![2, 3],
+            data_type: DataType::F32,
+            data: Some(vec![0; 24]),
+        });
+
+        let mut attrs = HashMap::new();
+        attrs.insert("perm".to_string(), crate::ir::Attribute::Ints(vec![1, 0]));
+
+        ir.nodes.push(Node {
+            name: "transpose".to_string(),
+            op_type: "Transpose".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: attrs,
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("B"));
+        assert_eq!(ir.weights["B"].shape, vec![3, 2]);
     }
 }
