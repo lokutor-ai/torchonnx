@@ -83,6 +83,30 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "MatMul" => {
+                    let shape_a = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    let shape_b = value_shapes.get(&node.inputs[1])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[1])))?;
+
+                    if shape_a.len() < 2 || shape_b.len() < 2 {
+                        return Err(OptimizerError::Error("MatMul requires at least 2D inputs".to_string()));
+                    }
+
+                    let mut output_shape = Vec::new();
+                    for i in 0..shape_a.len() - 1 {
+                        output_shape.push(shape_a[i]);
+                    }
+                    output_shape.push(shape_b[shape_b.len() - 1]);
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 _ => {}
             }
         }
@@ -321,19 +345,295 @@ mod tests {
 
         
 
-                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
         
 
-                        assert_eq!(y_shape, Some(&vec![]));
+                
 
         
 
-                    }
+                                assert_eq!(y_shape, Some(&vec![]));
 
         
 
-                }
+                
+
+        
+
+                            }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                            #[test]
+
+        
+
+                
+
+        
+
+                            fn test_infer_matmul_shape() {
+
+        
+
+                
+
+        
+
+                                let mut ir = ModelIR::new();
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                                ir.inputs.push(Tensor {
+
+        
+
+                
+
+        
+
+                                    name: "A".to_string(),
+
+        
+
+                
+
+        
+
+                                    shape: vec![5, 10],
+
+        
+
+                
+
+        
+
+                                    data_type: DataType::F32,
+
+        
+
+                
+
+        
+
+                                    data: None,
+
+        
+
+                
+
+        
+
+                                });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                ir.inputs.push(Tensor {
+
+        
+
+                
+
+        
+
+                                    name: "B".to_string(),
+
+        
+
+                
+
+        
+
+                                    shape: vec![10, 3],
+
+        
+
+                
+
+        
+
+                                    data_type: DataType::F32,
+
+        
+
+                
+
+        
+
+                                    data: None,
+
+        
+
+                
+
+        
+
+                                });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                ir.nodes.push(Node {
+
+        
+
+                
+
+        
+
+                                    name: "matmul1".to_string(),
+
+        
+
+                
+
+        
+
+                                    op_type: "MatMul".to_string(),
+
+        
+
+                
+
+        
+
+                                    inputs: vec!["A".to_string(), "B".to_string()],
+
+        
+
+                
+
+        
+
+                                    outputs: vec!["Y".to_string()],
+
+        
+
+                
+
+        
+
+                                    attributes: HashMap::new(),
+
+        
+
+                
+
+        
+
+                                });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                ShapeInference::infer(&mut ir).unwrap();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+        
+
+                
+
+        
+
+                                assert_eq!(y_shape, Some(&vec![5, 3]));
+
+        
+
+                
+
+        
+
+                            }
+
+        
+
+                
+
+        
+
+                        }
+
+        
+
+                
+
+        
+
+                        
 
         
 
