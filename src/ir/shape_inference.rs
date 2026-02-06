@@ -323,6 +323,34 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Gemm" => {
+                    let shape_a = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    let shape_b = value_shapes.get(&node.inputs[1])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[1])))?;
+
+                    let trans_a = match node.attributes.get("transA") {
+                        Some(crate::ir::Attribute::Int(i)) => *i != 0,
+                        _ => false,
+                    };
+                    let trans_b = match node.attributes.get("transB") {
+                        Some(crate::ir::Attribute::Int(i)) => *i != 0,
+                        _ => false,
+                    };
+
+                    let m = if !trans_a { shape_a[0] } else { shape_a[1] };
+                    let n = if !trans_b { shape_b[1] } else { shape_b[0] };
+
+                    let output_shape = vec![m, n];
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
