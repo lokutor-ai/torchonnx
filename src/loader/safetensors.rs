@@ -44,6 +44,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use safetensors::serialize;
+    use std::collections::HashMap;
 
     #[test]
     fn test_load_valid_safetensors() {
@@ -53,8 +54,7 @@ mod tests {
         let mut data: HashMap<String, Vec<f32>> = HashMap::new();
         data.insert("weight".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
         
-        // Manual serialization for testing
-        let tensor_data: Vec<u8> = vec![0; 16]; // 4 f32s
+        let tensor_data: Vec<u8> = vec![0; 16];
         let metadata = HashMap::from([
             ("weight".to_string(), safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![2, 2], &tensor_data).unwrap())
         ]);
