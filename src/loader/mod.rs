@@ -19,3 +19,4 @@ pub trait ModelLoader {
 }
 
 pub mod safetensors;
+pub mod pytorch;
