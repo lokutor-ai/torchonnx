@@ -46,6 +46,43 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Einsum" => {
+                    let equation = match node.attributes.get("equation") {
+                        Some(crate::ir::Attribute::String(s)) => s,
+                        _ => return Err(OptimizerError::Error("Einsum missing equation attribute".to_string())),
+                    };
+
+                    let parts: Vec<&str> = equation.split("->").collect();
+                    let output_labels = if parts.len() > 1 { parts[1].trim() } else { "" };
+                    
+                    let mut label_to_size = HashMap::new();
+                    let input_labels_parts: Vec<&str> = parts[0].split(',').collect();
+                    
+                    for (i, labels) in input_labels_parts.iter().enumerate() {
+                        let shape = value_shapes.get(&node.inputs[i])
+                            .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[i])))?;
+                        
+                        let clean_labels = labels.trim();
+                        for (j, label) in clean_labels.chars().enumerate() {
+                            label_to_size.insert(label, shape[j]);
+                        }
+                    }
+
+                    let mut output_shape = Vec::new();
+                    for label in output_labels.chars() {
+                        let size = label_to_size.get(&label)
+                            .ok_or_else(|| OptimizerError::Error(format!("Label {} not found in inputs", label)))?;
+                        output_shape.push(*size);
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 _ => {}
             }
         }
@@ -144,12 +181,162 @@ mod tests {
 
         
 
-                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
-                assert_eq!(y_shape, Some(&vec![1, 10]));
+        
 
-            }
+                        assert_eq!(y_shape, Some(&vec![1, 10]));
 
-        }
+        
+
+                    }
+
+        
+
+                
+
+        
+
+                    #[test]
+
+        
+
+                    fn test_infer_einsum_dot_product() {
+
+        
+
+                        let mut ir = ModelIR::new();
+
+        
+
+                        
+
+        
+
+                        ir.inputs.push(Tensor {
+
+        
+
+                            name: "A".to_string(),
+
+        
+
+                            shape: vec![10],
+
+        
+
+                            data_type: DataType::F32,
+
+        
+
+                            data: None,
+
+        
+
+                        });
+
+        
+
+                
+
+        
+
+                        ir.inputs.push(Tensor {
+
+        
+
+                            name: "B".to_string(),
+
+        
+
+                            shape: vec![10],
+
+        
+
+                            data_type: DataType::F32,
+
+        
+
+                            data: None,
+
+        
+
+                        });
+
+        
+
+                
+
+        
+
+                        let mut attrs = HashMap::new();
+
+        
+
+                        attrs.insert("equation".to_string(), crate::ir::Attribute::String("i,i->".to_string()));
+
+        
+
+                
+
+        
+
+                        ir.nodes.push(Node {
+
+        
+
+                            name: "einsum1".to_string(),
+
+        
+
+                            op_type: "Einsum".to_string(),
+
+        
+
+                            inputs: vec!["A".to_string(), "B".to_string()],
+
+        
+
+                            outputs: vec!["Y".to_string()],
+
+        
+
+                            attributes: attrs,
+
+        
+
+                        });
+
+        
+
+                
+
+        
+
+                        ShapeInference::infer(&mut ir).unwrap();
+
+        
+
+                
+
+        
+
+                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+        
+
+                        assert_eq!(y_shape, Some(&vec![]));
+
+        
+
+                    }
+
+        
+
+                }
+
+        
+
+                
 
         
