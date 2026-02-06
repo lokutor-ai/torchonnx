@@ -249,6 +249,57 @@ impl OptimizationPass for ConstantFolding {
                     ir.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "BatchNormalization" {
+                let x = &ir.weights[&node.inputs[0]];
+                let scale = &ir.weights[&node.inputs[1]];
+                let bias = &ir.weights[&node.inputs[2]];
+                let mean = &ir.weights[&node.inputs[3]];
+                let var = &ir.weights[&node.inputs[4]];
+
+                if x.data_type == DataType::F32 {
+                    let epsilon = match node.attributes.get("epsilon") {
+                        Some(crate::ir::Attribute::Float(f)) => *f,
+                        _ => 1e-5,
+                    };
+
+                    let x_data: &[f32] = unsafe { std::slice::from_raw_parts(x.data.as_ref().unwrap().as_ptr() as *const f32, x.data.as_ref().unwrap().len() / 4) };
+                    let scale_data: &[f32] = unsafe { std::slice::from_raw_parts(scale.data.as_ref().unwrap().as_ptr() as *const f32, scale.data.as_ref().unwrap().len() / 4) };
+                    let bias_data: &[f32] = unsafe { std::slice::from_raw_parts(bias.data.as_ref().unwrap().as_ptr() as *const f32, bias.data.as_ref().unwrap().len() / 4) };
+                    let mean_data: &[f32] = unsafe { std::slice::from_raw_parts(mean.data.as_ref().unwrap().as_ptr() as *const f32, mean.data.as_ref().unwrap().len() / 4) };
+                    let var_data: &[f32] = unsafe { std::slice::from_raw_parts(var.data.as_ref().unwrap().as_ptr() as *const f32, var.data.as_ref().unwrap().len() / 4) };
+
+                    let c = x.shape[1];
+                    let items_per_channel = x_data.len() / (x.shape[0] * c);
+                    let mut res_data = vec![0.0f32; x_data.len()];
+
+                    for n in 0..x.shape[0] {
+                        for channel in 0..c {
+                            let gamma = scale_data[channel];
+                            let beta = bias_data[channel];
+                            let mu = mean_data[channel];
+                            let sigma2 = var_data[channel];
+                            let factor = gamma / (sigma2 + epsilon).sqrt();
+
+                            for j in 0..items_per_channel {
+                                let idx = (n * c + channel) * items_per_channel + j;
+                                res_data[idx] = (x_data[idx] - mu) * factor + beta;
+                            }
+                        }
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe { std::slice::from_raw_parts(res_data.as_ptr() as *const u8, res_data.len() * 4).to_vec() };
+
+                    let output_name = node.outputs[0].clone();
+                    ir.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: x.shape.clone(),
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.nodes.remove(i);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -528,5 +579,58 @@ mod tests {
         assert_eq!(ir.nodes.len(), 0);
         assert!(ir.weights.contains_key("B"));
         assert_eq!(ir.weights["B"].shape, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_constant_folding_batch_norm() {
+        let mut ir = ModelIR::new();
+        
+        ir.weights.insert("X".to_string(), Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 1, 1, 1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63]), // 1.0
+        });
+        ir.weights.insert("scale".to_string(), Tensor {
+            name: "scale".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63]), // 1.0
+        });
+        ir.weights.insert("bias".to_string(), Tensor {
+            name: "bias".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 0]), // 0.0
+        });
+        ir.weights.insert("mean".to_string(), Tensor {
+            name: "mean".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 0]), // 0.0
+        });
+        ir.weights.insert("var".to_string(), Tensor {
+            name: "var".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63]), // 1.0
+        });
+
+        ir.nodes.push(Node {
+            name: "bn".to_string(),
+            op_type: "BatchNormalization".to_string(),
+            inputs: vec!["X".to_string(), "scale".to_string(), "bias".to_string(), "mean".to_string(), "var".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+
+        assert_eq!(ir.nodes.len(), 0);
+        assert!(ir.weights.contains_key("Y"));
+        let res_w = &ir.weights["Y"];
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 1.0).abs() < 1e-4);
     }
 }
