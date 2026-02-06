@@ -78,14 +78,14 @@ mod tests {
             name: "A".to_string(),
             shape: vec![1],
             data_type: DataType::F32,
-            data: Some(vec![0, 0, 128, 63]), // 1.0
+            data: Some(vec![0, 0, 128, 63]),
         });
         
         ir.weights.insert("B".to_string(), Tensor {
             name: "B".to_string(),
             shape: vec![1],
             data_type: DataType::F32,
-            data: Some(vec![0, 0, 0, 64]), // 2.0
+            data: Some(vec![0, 0, 0, 64]),
         });
 
         ir.nodes.push(Node {

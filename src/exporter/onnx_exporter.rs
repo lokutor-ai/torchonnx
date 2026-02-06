@@ -91,15 +91,13 @@ mod tests {
     fn test_export_basic_model() {
         let mut ir = ModelIR::new();
         
-        // Add a weight
         ir.weights.insert("w1".to_string(), Tensor {
             name: "w1".to_string(),
             shape: vec![1, 1],
             data_type: DataType::F32,
-            data: Some(vec![0, 0, 128, 63]), // 1.0 in f32
+            data: Some(vec![0, 0, 128, 63]),
         });
 
-        // Add a node
         ir.nodes.push(Node {
             name: "add1".to_string(),
             op_type: "Add".to_string(),
