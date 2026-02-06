@@ -107,6 +107,32 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Transpose" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let perm = match node.attributes.get("perm") {
+                        Some(crate::ir::Attribute::Ints(p)) => p.clone(),
+                        _ => {
+                            let mut p: Vec<i64> = (0..shape.len() as i64).collect();
+                            p.reverse();
+                            p
+                        }
+                    };
+
+                    let mut output_shape = Vec::with_capacity(shape.len());
+                    for &p in &perm {
+                        output_shape.push(shape[p as usize]);
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 _ => {}
             }
         }
@@ -601,7 +627,7 @@ mod tests {
 
         
 
-                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
         
 
@@ -609,7 +635,7 @@ mod tests {
 
         
 
-                                assert_eq!(y_shape, Some(&vec![5, 3]));
+                        
 
         
 
@@ -617,7 +643,7 @@ mod tests {
 
         
 
-                            }
+                                        assert_eq!(y_shape, Some(&vec![5, 3]));
 
         
 
@@ -625,7 +651,495 @@ mod tests {
 
         
 
-                        }
+                        
+
+        
+
+                
+
+        
+
+                                    }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                    #[test]
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                    fn test_infer_transpose_shape() {
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        let mut ir = ModelIR::new();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        ir.inputs.push(Tensor {
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            name: "X".to_string(),
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            shape: vec![1, 2, 3],
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            data_type: DataType::F32,
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            data: None,
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        let mut attrs = HashMap::new();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        attrs.insert("perm".to_string(), crate::ir::Attribute::Ints(vec![0, 2, 1]));
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        ir.nodes.push(Node {
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            name: "transpose1".to_string(),
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            op_type: "Transpose".to_string(),
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            inputs: vec!["X".to_string()],
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            outputs: vec!["Y".to_string()],
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                            attributes: attrs,
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        });
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        ShapeInference::infer(&mut ir).unwrap();
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                        assert_eq!(y_shape, Some(&vec![1, 3, 2]));
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                    }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                }
+
+        
+
+                
+
+        
+
+                        
+
+        
+
+                
+
+        
+
+                                
 
         
 
