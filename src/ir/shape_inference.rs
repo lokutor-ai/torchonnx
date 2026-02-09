@@ -686,7 +686,7 @@ impl ShapeInference {
                     
                     let to = match node.attributes.get("to") {
                         Some(crate::ir::Attribute::Int(i)) => *i,
-                        _ => 1, // Default to float
+                        _ => 1,
                     };
 
                     let data_type = match to {
@@ -703,6 +703,49 @@ impl ShapeInference {
                         name: node.outputs[0].clone(),
                         shape,
                         data_type,
+                        data: None,
+                    });
+                }
+                "Expand" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let target_shape_tensor = ir.graph.weights.get(&node.inputs[1])
+                        .ok_or_else(|| OptimizerError::Error("Expand target shape must be constant for now".to_string()))?;
+                    let data = target_shape_tensor.data.as_ref().unwrap();
+                    let mut target_shape = Vec::new();
+                    for j in 0..target_shape_tensor.shape[0] {
+                        target_shape.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()) as usize);
+                    }
+
+                    let mut output_shape = Vec::new();
+                    let rank_diff = (target_shape.len() as i64 - shape.len() as i64).abs() as usize;
+                    
+                    if target_shape.len() >= shape.len() {
+                        for i in 0..rank_diff {
+                            output_shape.push(target_shape[i]);
+                        }
+                        for i in 0..shape.len() {
+                            let s = shape[i];
+                            let t = target_shape[i + rank_diff];
+                            output_shape.push(std::cmp::max(s, t));
+                        }
+                    } else {
+                        for i in 0..rank_diff {
+                            output_shape.push(shape[i]);
+                        }
+                        for i in 0..target_shape.len() {
+                            let s = shape[i + rank_diff];
+                            let t = target_shape[i];
+                            output_shape.push(std::cmp::max(s, t));
+                        }
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
                         data: None,
                     });
                 }
@@ -1404,119 +1447,128 @@ mod tests {
         ShapeInference::infer(&mut ir).unwrap();
         let y1_shape = ir.graph.outputs.iter().find(|t| t.name == "Y1").map(|t| &t.shape);
         let y2_shape = ir.graph.outputs.iter().find(|t| t.name == "Y2").map(|t| &t.shape);
-                assert_eq!(y1_shape, Some(&vec![1, 10, 10]));
-                assert_eq!(y2_shape, Some(&vec![1, 10, 10]));
-            }
-        
-                #[test]
-                fn test_infer_constant_shape() {
-                    let mut ir = ModelIR::new();
-                    
-                    let mut attrs = HashMap::new();
-                    let const_tensor = Tensor {
-                        name: "val".to_string(),
-                        shape: vec![2, 2],
-                        data_type: DataType::F32,
-                        data: Some(vec![0; 16]),
-                    };
-                    attrs.insert("value".to_string(), crate::ir::Attribute::Tensor(const_tensor));
-            
-                    ir.graph.nodes.push(Node {
-                        name: "const1".to_string(),
-                        op_type: "Constant".to_string(),
-                        inputs: vec![],
-                        outputs: vec!["Y".to_string()],
-                        attributes: attrs,
-                    });
-            
-                    ShapeInference::infer(&mut ir).unwrap();
-            
-                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                            assert_eq!(y_shape, Some(&vec![2, 2]));
-                        }
-                    
-                        #[test]
-                        fn test_infer_resize_shape() {
-                            let mut ir = ModelIR::new();
-                            
-                            ir.graph.inputs.push(Tensor {
-                                name: "X".to_string(),
-                                shape: vec![1, 3, 224, 224],
-                                data_type: DataType::F32,
-                                data: None,
-                            });
-                    
-                            ir.graph.weights.insert("scales".to_string(), Tensor {
-                                name: "scales".to_string(),
-                                shape: vec![4],
-                                data_type: DataType::F32,
-                                data: Some(vec![0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 0, 64]), // [1.0, 1.0, 2.0, 2.0]
-                            });
-                    
-                            ir.graph.nodes.push(Node {
-                                name: "resize1".to_string(),
-                                op_type: "Resize".to_string(),
-                                inputs: vec!["X".to_string(), "".to_string(), "scales".to_string()],
-                                outputs: vec!["Y".to_string()],
-                                attributes: HashMap::new(),
-                            });
-                    
-                            ShapeInference::infer(&mut ir).unwrap();
-                    
-                                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                                    assert_eq!(y_shape, Some(&vec![1, 3, 448, 448]));
-                                }
-                            
-                                #[test]
-                                fn test_infer_shape_op_shape() {
-                                    let mut ir = ModelIR::new();
-                                    
-                                    ir.graph.inputs.push(Tensor {
-                                        name: "X".to_string(),
-                                        shape: vec![1, 3, 224, 224],
-                                        data_type: DataType::F32,
-                                        data: None,
-                                    });
-                            
-                                    ir.graph.nodes.push(Node {
-                                        name: "shape1".to_string(),
-                                        op_type: "Shape".to_string(),
-                                        inputs: vec!["X".to_string()],
-                                        outputs: vec!["Y".to_string()],
-                                        attributes: HashMap::new(),
-                                    });
-                            
-                                    ShapeInference::infer(&mut ir).unwrap();
-                            
-                                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                                            assert_eq!(y_shape, Some(&vec![4]));
-                                        }
-                                    
-                                        #[test]
-                                        fn test_infer_cast_shape() {
-                                            let mut ir = ModelIR::new();
-                                            
-                                            ir.graph.inputs.push(Tensor {
-                                                name: "X".to_string(),
-                                                shape: vec![1, 10],
-                                                data_type: DataType::F32,
-                                                data: None,
-                                            });
-                                    
-                                                    let mut attrs = HashMap::new();
-                                                    attrs.insert("to".to_string(), crate::ir::Attribute::Int(7)); // Int64
-                                                                                        ir.graph.nodes.push(Node {
-                                                name: "cast1".to_string(),
-                                                op_type: "Cast".to_string(),
-                                                inputs: vec!["X".to_string()],
-                                                outputs: vec!["Y".to_string()],
-                                                attributes: attrs,
-                                            });
-                                    
-                                            ShapeInference::infer(&mut ir).unwrap();
-                                    
-                                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                                            assert_eq!(y_shape, Some(&vec![1, 10]));
-                                        }
-                                    }
-                                    
+        assert_eq!(y1_shape, Some(&vec![1, 10, 10]));
+        assert_eq!(y2_shape, Some(&vec![1, 10, 10]));
+    }
+
+    #[test]
+    fn test_infer_constant_shape() {
+        let mut ir = ModelIR::new();
+        let mut attrs = HashMap::new();
+        let const_tensor = Tensor {
+            name: "val".to_string(),
+            shape: vec![2, 2],
+            data_type: DataType::F32,
+            data: Some(vec![0; 16]),
+        };
+        attrs.insert("value".to_string(), crate::ir::Attribute::Tensor(const_tensor));
+        ir.graph.nodes.push(Node {
+            name: "const1".to_string(),
+            op_type: "Constant".to_string(),
+            inputs: vec![],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![2, 2]));
+    }
+
+    #[test]
+    fn test_infer_resize_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 3, 224, 224],
+            data_type: DataType::F32,
+            data: None,
+        });
+        ir.graph.weights.insert("scales".to_string(), Tensor {
+            name: "scales".to_string(),
+            shape: vec![4],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 0, 64]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "resize1".to_string(),
+            op_type: "Resize".to_string(),
+            inputs: vec!["X".to_string(), "".to_string(), "scales".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 3, 448, 448]));
+    }
+
+    #[test]
+    fn test_infer_shape_op_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 3, 224, 224],
+            data_type: DataType::F32,
+            data: None,
+        });
+        ir.graph.nodes.push(Node {
+            name: "shape1".to_string(),
+            op_type: "Shape".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![4]));
+    }
+
+    #[test]
+    fn test_infer_cast_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 10],
+            data_type: DataType::F32,
+            data: None,
+        });
+        let mut attrs = HashMap::new();
+        attrs.insert("to".to_string(), crate::ir::Attribute::Int(7));
+        ir.graph.nodes.push(Node {
+            name: "cast1".to_string(),
+            op_type: "Cast".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 10]));
+    }
+
+    #[test]
+    fn test_infer_expand_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 10],
+            data_type: DataType::F32,
+            data: None,
+        });
+        ir.graph.weights.insert("shape".to_string(), Tensor {
+            name: "shape".to_string(),
+            shape: vec![3],
+            data_type: DataType::I64,
+            data: Some(vec![5, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "expand1".to_string(),
+            op_type: "Expand".to_string(),
+            inputs: vec!["X".to_string(), "shape".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![5, 1, 10]));
+    }
+}
