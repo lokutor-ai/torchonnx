@@ -608,8 +608,8 @@ impl OptimizationPass for ConstantFolding {
 
                     for outer in 0..outer_size {
                         for (idx, &idx_val) in indices_data.iter().enumerate() {
-                            let idx_val = if idx_val < 0 { (axis_size as i64 + idx_val) as usize } else { idx_val as usize };
-                            let src_offset = (outer * axis_size + idx_val) * inner_size;
+                            let idx_val_usize = if idx_val < 0 { (axis_size as i64 + idx_val) as usize } else { idx_val as usize };
+                            let src_offset = (outer * axis_size + idx_val_usize) * inner_size;
                             let dest_offset = (outer * indices_len + idx) * inner_size;
                             res_data[dest_offset..dest_offset + inner_size].copy_from_slice(&data_data[src_offset..src_offset + inner_size]);
                         }
@@ -633,6 +633,76 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Split" {
+                let a_shape = ir.graph.weights[&node.inputs[0]].shape.clone();
+                let a_data_bytes = ir.graph.weights[&node.inputs[0]].data.as_ref().unwrap().clone();
+                
+                let axis = match node.attributes.get("axis") {
+                    Some(crate::ir::Attribute::Int(ax)) => *ax,
+                    _ => 0,
+                };
+                let axis = if axis < 0 { (a_shape.len() as i64 + axis) as usize } else { axis as usize };
+
+                let split_lens = if node.inputs.len() > 1 {
+                    let split_tensor = &ir.graph.weights[&node.inputs[1]];
+                    let data = split_tensor.data.as_ref().unwrap();
+                    let mut res = Vec::new();
+                    for j in 0..split_tensor.shape[0] {
+                        res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()) as usize);
+                    }
+                    res
+                } else if let Some(crate::ir::Attribute::Ints(s)) = node.attributes.get("split") {
+                    s.iter().map(|&x| x as usize).collect()
+                } else {
+                    let num_outputs = node.outputs.len();
+                    vec![a_shape[axis] / num_outputs; num_outputs]
+                };
+
+                let a_data: &[f32] = unsafe {
+                    std::slice::from_raw_parts(
+                        a_data_bytes.as_ptr() as *const f32,
+                        a_data_bytes.len() / 4,
+                    )
+                };
+
+                let mut outer_size = 1;
+                for j in 0..axis { outer_size *= a_shape[j]; }
+                let axis_size = a_shape[axis];
+                let mut inner_size = 1;
+                for j in axis + 1..a_shape.len() { inner_size *= a_shape[j]; }
+
+                let mut current_offset = 0;
+                for (idx, &len) in split_lens.iter().enumerate() {
+                    let mut output_shape = a_shape.clone();
+                    output_shape[axis] = len;
+                    let mut res_data = vec![0.0f32; outer_size * len * inner_size];
+
+                    for outer in 0..outer_size {
+                        let src_start = (outer * axis_size + current_offset) * inner_size;
+                        let dest_start = outer * len * inner_size;
+                        res_data[dest_start..dest_start + len * inner_size]
+                            .copy_from_slice(&a_data[src_start..src_start + len * inner_size]);
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let output_name = node.outputs[idx].clone();
+                    ir.graph.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+                    current_offset += len;
+                }
+
+                ir.graph.nodes.remove(i);
+                continue;
             }
             i += 1;
         }
@@ -1132,5 +1202,42 @@ mod tests {
             ).to_vec()
         };
         assert_eq!(res_data, vec![1.0, 2.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_constant_folding_split() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1, 4],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64]),
+        });
+        let mut attrs = HashMap::new();
+        attrs.insert("axis".to_string(), crate::ir::Attribute::Int(1));
+        ir.graph.nodes.push(Node {
+            name: "split".to_string(),
+            op_type: "Split".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["Y1".to_string(), "Y2".to_string()],
+            attributes: attrs,
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("Y1"));
+        assert!(ir.graph.weights.contains_key("Y2"));
+        assert_eq!(ir.graph.weights["Y1"].shape, vec![1, 2]);
+        assert_eq!(ir.graph.weights["Y2"].shape, vec![1, 2]);
+        let res1_w = &ir.graph.weights["Y1"];
+        let res1_data: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(res1_w.data.as_ref().unwrap().as_ptr() as *const f32, 2).to_vec()
+        };
+        assert_eq!(res1_data, vec![1.0, 2.0]);
+        let res2_w = &ir.graph.weights["Y2"];
+        let res2_data: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(res2_w.data.as_ref().unwrap().as_ptr() as *const f32, 2).to_vec()
+        };
+        assert_eq!(res2_data, vec![3.0, 4.0]);
     }
 }
