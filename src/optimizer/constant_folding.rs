@@ -130,7 +130,7 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
-            } else if all_constants && (node.op_type == "Relu" || node.op_type == "Sigmoid" || node.op_type == "Tanh") {
+            } else if all_constants && (node.op_type == "Relu" || node.op_type == "Sigmoid" || node.op_type == "Tanh" || node.op_type == "Log" || node.op_type == "Exp") {
                 let a = &ir.graph.weights[&node.inputs[0]];
                 if a.data_type == DataType::F32 {
                     let a_data: &[f32] = unsafe {
@@ -142,12 +142,13 @@ impl OptimizationPass for ConstantFolding {
 
                     let mut res_data = Vec::with_capacity(a_data.len());
                     for &val in a_data {
-                        if node.op_type == "Relu" {
-                            res_data.push(if val > 0.0 { val } else { 0.0 });
-                        } else if node.op_type == "Sigmoid" {
-                            res_data.push(1.0 / (1.0 + (-val).exp()));
-                        } else {
-                            res_data.push(val.tanh());
+                        match node.op_type.as_str() {
+                            "Relu" => res_data.push(if val > 0.0 { val } else { 0.0 }),
+                            "Sigmoid" => res_data.push(1.0 / (1.0 + (-val).exp())),
+                            "Tanh" => res_data.push(val.tanh()),
+                            "Log" => res_data.push(val.ln()),
+                            "Exp" => res_data.push(val.exp()),
+                            _ => unreachable!(),
                         }
                     }
 
@@ -281,14 +282,14 @@ impl OptimizationPass for ConstantFolding {
                     for n in 0..x.shape[0] {
                         for channel in 0..c {
                             let gamma = scale_data[channel];
-                            let beta = bias_data[channel];
+                            let byte = bias_data[channel];
                             let mu = mean_data[channel];
                             let sigma2 = var_data[channel];
                             let factor = gamma / (sigma2 + epsilon).sqrt();
 
                             for j in 0..items_per_channel {
                                 let idx = (n * c + channel) * items_per_channel + j;
-                                res_data[idx] = (x_data[idx] - mu) * factor + beta;
+                                res_data[idx] = (x_data[idx] - mu) * factor + byte;
                             }
                         }
                     }
@@ -1295,5 +1296,55 @@ mod tests {
         let res_w = &ir.graph.weights["B"];
         let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
         assert!((res_data - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_log() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "log".to_string(),
+            op_type: "Log".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        let res_w = &ir.graph.weights["B"];
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_exp() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "exp".to_string(),
+            op_type: "Exp".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        let res_w = &ir.graph.weights["B"];
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 1.0).abs() < 1e-4);
     }
 }
