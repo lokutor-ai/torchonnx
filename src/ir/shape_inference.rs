@@ -632,6 +632,39 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Resize" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let mut output_shape = Vec::new();
+
+                    if node.inputs.len() > 3 && !node.inputs[3].is_empty() {
+                        let sizes_tensor = ir.graph.weights.get(&node.inputs[3])
+                            .ok_or_else(|| OptimizerError::Error("Resize sizes must be constant for now".to_string()))?;
+                        let data = sizes_tensor.data.as_ref().unwrap();
+                        for j in 0..sizes_tensor.shape[0] {
+                            output_shape.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()) as usize);
+                        }
+                    } else if node.inputs.len() > 2 && !node.inputs[2].is_empty() {
+                        let scales_tensor = ir.graph.weights.get(&node.inputs[2])
+                            .ok_or_else(|| OptimizerError::Error("Resize scales must be constant for now".to_string()))?;
+                        let data = scales_tensor.data.as_ref().unwrap();
+                        for j in 0..scales_tensor.shape[0] {
+                            let scale = f32::from_le_bytes(data[j*4..j*4+4].try_into().unwrap());
+                            output_shape.push((shape[j] as f32 * scale) as usize);
+                        }
+                    } else {
+                        return Err(OptimizerError::Error("Resize requires scales or sizes".to_string()));
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1357,8 +1390,40 @@ mod tests {
             
                     ShapeInference::infer(&mut ir).unwrap();
             
-                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                    assert_eq!(y_shape, Some(&vec![2, 2]));
-                }
-            }
-            
+                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                            assert_eq!(y_shape, Some(&vec![2, 2]));
+                        }
+                    
+                        #[test]
+                        fn test_infer_resize_shape() {
+                            let mut ir = ModelIR::new();
+                            
+                            ir.graph.inputs.push(Tensor {
+                                name: "X".to_string(),
+                                shape: vec![1, 3, 224, 224],
+                                data_type: DataType::F32,
+                                data: None,
+                            });
+                    
+                            ir.graph.weights.insert("scales".to_string(), Tensor {
+                                name: "scales".to_string(),
+                                shape: vec![4],
+                                data_type: DataType::F32,
+                                data: Some(vec![0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 0, 64]), // [1.0, 1.0, 2.0, 2.0]
+                            });
+                    
+                            ir.graph.nodes.push(Node {
+                                name: "resize1".to_string(),
+                                op_type: "Resize".to_string(),
+                                inputs: vec!["X".to_string(), "".to_string(), "scales".to_string()],
+                                outputs: vec!["Y".to_string()],
+                                attributes: HashMap::new(),
+                            });
+                    
+                            ShapeInference::infer(&mut ir).unwrap();
+                    
+                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                            assert_eq!(y_shape, Some(&vec![1, 3, 448, 448]));
+                        }
+                    }
+                    
