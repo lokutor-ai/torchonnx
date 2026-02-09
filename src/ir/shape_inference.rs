@@ -351,6 +351,19 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Identity" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
+                        .clone();
+
+                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -830,7 +843,33 @@ mod tests {
             attributes: HashMap::new(),
         });
         ShapeInference::infer(&mut ir).unwrap();
-        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-        assert_eq!(y_shape, Some(&vec![1, 1000]));
-    }
-}
+                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                assert_eq!(y_shape, Some(&vec![1, 1000]));
+            }
+        
+            #[test]
+            fn test_infer_identity_shape() {
+                let mut ir = ModelIR::new();
+                
+                ir.inputs.push(Tensor {
+                    name: "X".to_string(),
+                    shape: vec![1, 3, 224, 224],
+                    data_type: DataType::F32,
+                    data: None,
+                });
+        
+                ir.nodes.push(Node {
+                    name: "id1".to_string(),
+                    op_type: "Identity".to_string(),
+                    inputs: vec!["X".to_string()],
+                    outputs: vec!["Y".to_string()],
+                    attributes: HashMap::new(),
+                });
+        
+                ShapeInference::infer(&mut ir).unwrap();
+        
+                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                assert_eq!(y_shape, Some(&vec![1, 3, 224, 224]));
+            }
+        }
+        
