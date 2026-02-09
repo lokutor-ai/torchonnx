@@ -569,6 +569,23 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "ConstantOfShape" => {
+                    let shape_tensor = ir.graph.weights.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error("ConstantOfShape input must be constant for now".to_string()))?;
+                    let data = shape_tensor.data.as_ref().unwrap();
+                    let mut output_shape = Vec::new();
+                    for j in 0..shape_tensor.shape[0] {
+                        output_shape.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()) as usize);
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Resize" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
@@ -1408,6 +1425,27 @@ mod tests {
         ShapeInference::infer(&mut ir).unwrap();
         let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
         assert_eq!(y_shape, Some(&vec![2, 2]));
+    }
+
+    #[test]
+    fn test_infer_constant_of_shape_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("shape".to_string(), Tensor {
+            name: "shape".to_string(),
+            shape: vec![3],
+            data_type: DataType::I64,
+            data: Some(vec![1, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "cos1".to_string(),
+            op_type: "ConstantOfShape".to_string(),
+            inputs: vec!["shape".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 10, 20]));
     }
 
     #[test]
