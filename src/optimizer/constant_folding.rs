@@ -398,6 +398,68 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Squeeze" {
+                let a = &ir.graph.weights[&node.inputs[0]];
+                let axes = if node.inputs.len() > 1 {
+                    let axes_tensor = &ir.graph.weights[&node.inputs[1]];
+                    let data = axes_tensor.data.as_ref().unwrap();
+                    let mut res = Vec::new();
+                    for j in 0..axes_tensor.shape[0] {
+                        res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                    }
+                    res
+                } else {
+                    let mut res = Vec::new();
+                    for (idx, &d) in a.shape.iter().enumerate() {
+                        if d == 1 { res.push(idx as i64); }
+                    }
+                    res
+                };
+
+                let axes_set: std::collections::HashSet<usize> = axes.iter().map(|&ax| if ax < 0 { (a.shape.len() as i64 + ax) as usize } else { ax as usize }).collect();
+                let mut output_shape = Vec::new();
+                for (idx, &d) in a.shape.iter().enumerate() {
+                    if !axes_set.contains(&idx) {
+                        output_shape.push(d);
+                    }
+                }
+
+                let output_name = node.outputs[0].clone();
+                ir.graph.weights.insert(output_name.clone(), Tensor {
+                    name: output_name,
+                    shape: output_shape,
+                    data_type: a.data_type.clone(),
+                    data: a.data.clone(),
+                });
+
+                ir.graph.nodes.remove(i);
+                continue;
+            } else if all_constants && node.op_type == "Unsqueeze" {
+                let a = &ir.graph.weights[&node.inputs[0]];
+                let axes_tensor = &ir.graph.weights[&node.inputs[1]];
+                let data = axes_tensor.data.as_ref().unwrap();
+                let mut axes = Vec::new();
+                for j in 0..axes_tensor.shape[0] {
+                    axes.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                }
+
+                let mut output_shape = a.shape.clone();
+                axes.sort_unstable();
+                for &ax in &axes {
+                    let ax = if ax < 0 { (output_shape.len() as i64 + 1 + ax) as usize } else { ax as usize };
+                    output_shape.insert(ax, 1);
+                }
+
+                let output_name = node.outputs[0].clone();
+                ir.graph.weights.insert(output_name.clone(), Tensor {
+                    name: output_name,
+                    shape: output_shape,
+                    data_type: a.data_type.clone(),
+                    data: a.data.clone(),
+                });
+
+                ir.graph.nodes.remove(i);
+                continue;
             } else if all_constants && node.op_type == "Slice" {
                 let a = &ir.graph.weights[&node.inputs[0]];
                 let starts_tensor = &ir.graph.weights[&node.inputs[1]];
@@ -509,42 +571,6 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
-            } else if all_constants && node.op_type == "Squeeze" {
-                let a = &ir.graph.weights[&node.inputs[0]];
-                let axes = if node.inputs.len() > 1 {
-                    let axes_tensor = &ir.graph.weights[&node.inputs[1]];
-                    let data = axes_tensor.data.as_ref().unwrap();
-                    let mut res = Vec::new();
-                    for j in 0..axes_tensor.shape[0] {
-                        res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
-                    }
-                    res
-                } else {
-                    let mut res = Vec::new();
-                    for (idx, &d) in a.shape.iter().enumerate() {
-                        if d == 1 { res.push(idx as i64); }
-                    }
-                    res
-                };
-
-                let axes_set: std::collections::HashSet<usize> = axes.iter().map(|&ax| if ax < 0 { (a.shape.len() as i64 + ax) as usize } else { ax as usize }).collect();
-                let mut output_shape = Vec::new();
-                for (idx, &d) in a.shape.iter().enumerate() {
-                    if !axes_set.contains(&idx) {
-                        output_shape.push(d);
-                    }
-                }
-
-                let output_name = node.outputs[0].clone();
-                ir.graph.weights.insert(output_name.clone(), Tensor {
-                    name: output_name,
-                    shape: output_shape,
-                    data_type: a.data_type.clone(),
-                    data: a.data.clone(),
-                });
-
-                ir.graph.nodes.remove(i);
-                continue;
             }
             i += 1;
         }
@@ -898,91 +924,108 @@ mod tests {
         assert!(ir.graph.weights.contains_key("B"));
         assert_eq!(ir.graph.weights["B"].shape, vec![1, 1, 1, 1]);
         let res_w = &ir.graph.weights["B"];
-                let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
-                assert!((res_data - 2.5).abs() < 1e-4);
-            }
-        
-            #[test]
-            fn test_constant_folding_slice() {
-                let mut ir = ModelIR::new();
-                
-                ir.graph.weights.insert("A".to_string(), Tensor {
-                    name: "A".to_string(),
-                    shape: vec![4],
-                    data_type: DataType::F32,
-                    data: Some(vec![0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64]), // [1.0, 2.0, 3.0, 4.0]
-                });
-        
-                ir.graph.weights.insert("starts".to_string(), Tensor {
-                    name: "starts".to_string(),
-                    shape: vec![1],
-                    data_type: DataType::I64,
-                    data: Some(vec![1, 0, 0, 0, 0, 0, 0, 0]),
-                });
-        
-                ir.graph.weights.insert("ends".to_string(), Tensor {
-                    name: "ends".to_string(),
-                    shape: vec![1],
-                    data_type: DataType::I64,
-                    data: Some(vec![3, 0, 0, 0, 0, 0, 0, 0]),
-                });
-        
-                ir.graph.nodes.push(Node {
-                    name: "slice".to_string(),
-                    op_type: "Slice".to_string(),
-                    inputs: vec!["A".to_string(), "starts".to_string(), "ends".to_string()],
-                    outputs: vec!["B".to_string()],
-                    attributes: HashMap::new(),
-                });
-        
-                let folding = ConstantFolding;
-                folding.apply(&mut ir).unwrap();
-        
-                assert_eq!(ir.graph.nodes.len(), 0);
-                assert!(ir.graph.weights.contains_key("B"));
-                assert_eq!(ir.graph.weights["B"].shape, vec![2]);
-                let res_w = &ir.graph.weights["B"];
-                let res_data: Vec<f32> = unsafe {
-                    std::slice::from_raw_parts(
-                        res_w.data.as_ref().unwrap().as_ptr() as *const f32,
-                        2,
-                    ).to_vec()
-                };
-                        assert_eq!(res_data, vec![2.0, 3.0]);
-                    }
-                
-                    #[test]
-                    fn test_constant_folding_squeeze() {
-                        let mut ir = ModelIR::new();
-                        
-                        ir.graph.weights.insert("A".to_string(), Tensor {
-                            name: "A".to_string(),
-                            shape: vec![1, 2, 1, 3],
-                            data_type: DataType::F32,
-                            data: Some(vec![0; 24]),
-                        });
-                
-                        ir.graph.weights.insert("axes".to_string(), Tensor {
-                            name: "axes".to_string(),
-                            shape: vec![2],
-                            data_type: DataType::I64,
-                            data: Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]),
-                        });
-                
-                        ir.graph.nodes.push(Node {
-                            name: "squeeze".to_string(),
-                            op_type: "Squeeze".to_string(),
-                            inputs: vec!["A".to_string(), "axes".to_string()],
-                            outputs: vec!["B".to_string()],
-                            attributes: HashMap::new(),
-                        });
-                
-                        let folding = ConstantFolding;
-                        folding.apply(&mut ir).unwrap();
-                
-                        assert_eq!(ir.graph.nodes.len(), 0);
-                        assert!(ir.graph.weights.contains_key("B"));
-                        assert_eq!(ir.graph.weights["B"].shape, vec![2, 3]);
-                    }
-                }
-                
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 2.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_squeeze() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1, 2, 1, 3],
+            data_type: DataType::F32,
+            data: Some(vec![0; 24]),
+        });
+        ir.graph.weights.insert("axes".to_string(), Tensor {
+            name: "axes".to_string(),
+            shape: vec![2],
+            data_type: DataType::I64,
+            data: Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "squeeze".to_string(),
+            op_type: "Squeeze".to_string(),
+            inputs: vec!["A".to_string(), "axes".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        assert_eq!(ir.graph.weights["B"].shape, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_constant_folding_unsqueeze() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![2, 3],
+            data_type: DataType::F32,
+            data: Some(vec![0; 24]),
+        });
+        ir.graph.weights.insert("axes".to_string(), Tensor {
+            name: "axes".to_string(),
+            shape: vec![2],
+            data_type: DataType::I64,
+            data: Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "unsqueeze".to_string(),
+            op_type: "Unsqueeze".to_string(),
+            inputs: vec!["A".to_string(), "axes".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        assert_eq!(ir.graph.weights["B"].shape, vec![1, 2, 1, 3]);
+    }
+
+    #[test]
+    fn test_constant_folding_slice() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![4],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64]),
+        });
+        ir.graph.weights.insert("starts".to_string(), Tensor {
+            name: "starts".to_string(),
+            shape: vec![1],
+            data_type: DataType::I64,
+            data: Some(vec![1, 0, 0, 0, 0, 0, 0, 0]),
+        });
+        ir.graph.weights.insert("ends".to_string(), Tensor {
+            name: "ends".to_string(),
+            shape: vec![1],
+            data_type: DataType::I64,
+            data: Some(vec![3, 0, 0, 0, 0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "slice".to_string(),
+            op_type: "Slice".to_string(),
+            inputs: vec!["A".to_string(), "starts".to_string(), "ends".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        assert_eq!(ir.graph.weights["B"].shape, vec![2]);
+        let res_w = &ir.graph.weights["B"];
+        let res_data: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(
+                res_w.data.as_ref().unwrap().as_ptr() as *const f32,
+                2,
+            ).to_vec()
+        };
+        assert_eq!(res_data, vec![2.0, 3.0]);
+    }
+}
