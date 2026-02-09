@@ -420,6 +420,68 @@ impl ShapeInference {
                         });
                     }
                 }
+                "Slice" => {
+                    let mut output_shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
+                        .clone();
+                    
+                    let starts_tensor = ir.graph.weights.get(&node.inputs[1])
+                        .ok_or_else(|| OptimizerError::Error("Slice starts must be constant for now".to_string()))?;
+                    let ends_tensor = ir.graph.weights.get(&node.inputs[2])
+                        .ok_or_else(|| OptimizerError::Error("Slice ends must be constant for now".to_string()))?;
+                    
+                    let axes = if node.inputs.len() > 3 {
+                        let axes_tensor = ir.graph.weights.get(&node.inputs[3])
+                            .ok_or_else(|| OptimizerError::Error("Slice axes must be constant for now".to_string()))?;
+                        let data = axes_tensor.data.as_ref().unwrap();
+                        let mut res = Vec::new();
+                        for j in 0..axes_tensor.shape[0] {
+                            res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                        }
+                        res
+                    } else {
+                        (0..output_shape.len() as i64).collect()
+                    };
+
+                    let steps = if node.inputs.len() > 4 {
+                        let steps_tensor = ir.graph.weights.get(&node.inputs[4])
+                            .ok_or_else(|| OptimizerError::Error("Slice steps must be constant for now".to_string()))?;
+                        let data = steps_tensor.data.as_ref().unwrap();
+                        let mut res = Vec::new();
+                        for j in 0..steps_tensor.shape[0] {
+                            res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                        }
+                        res
+                    } else {
+                        vec![1; axes.len()]
+                    };
+
+                    let starts_data = starts_tensor.data.as_ref().unwrap();
+                    let ends_data = ends_tensor.data.as_ref().unwrap();
+
+                    for (i, &axis) in axes.iter().enumerate() {
+                        let axis = if axis < 0 { (output_shape.len() as i64 + axis) as usize } else { axis as usize };
+                        let start = i64::from_le_bytes(starts_data[i*8..i*8+8].try_into().unwrap());
+                        let end = i64::from_le_bytes(ends_data[i*8..i*8+8].try_into().unwrap());
+                        let step = steps[i];
+
+                        let dim_size = output_shape[axis] as i64;
+                        let start = if start < 0 { dim_size + start } else { start };
+                        let start = start.clamp(0, dim_size);
+                        let end = if end < 0 { dim_size + end } else { end };
+                        let end = end.clamp(0, dim_size);
+
+                        output_shape[axis] = (((end - start).abs() + step.abs() - 1) / step.abs()) as usize;
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1448,13 +1510,107 @@ mod tests {
 
             let y_seq_shape = ir.graph.outputs.iter().find(|t| t.name == "y_seq").map(|t| &t.shape);
 
-            assert_eq!(final_h_shape, Some(&vec![1, 128]));
+                    assert_eq!(final_h_shape, Some(&vec![1, 128]));
 
-            assert_eq!(y_seq_shape, Some(&vec![10, 1, 128]));
+                    assert_eq!(y_seq_shape, Some(&vec![10, 1, 128]));
 
-        }
+                }
 
-    }
+            
+
+                #[test]
+
+                fn test_infer_slice_shape() {
+
+                    let mut ir = ModelIR::new();
+
+                    
+
+                    ir.graph.inputs.push(Tensor {
+
+                        name: "X".to_string(),
+
+                        shape: vec![1, 10, 20],
+
+                        data_type: DataType::F32,
+
+                        data: None,
+
+                    });
+
+            
+
+                    ir.graph.weights.insert("starts".to_string(), Tensor {
+
+                        name: "starts".to_string(),
+
+                        shape: vec![1],
+
+                        data_type: DataType::I64,
+
+                        data: Some(vec![5, 0, 0, 0, 0, 0, 0, 0]),
+
+                    });
+
+            
+
+                    ir.graph.weights.insert("ends".to_string(), Tensor {
+
+                        name: "ends".to_string(),
+
+                        shape: vec![1],
+
+                        data_type: DataType::I64,
+
+                        data: Some(vec![15, 0, 0, 0, 0, 0, 0, 0]),
+
+                    });
+
+            
+
+                    ir.graph.weights.insert("axes".to_string(), Tensor {
+
+                        name: "axes".to_string(),
+
+                        shape: vec![1],
+
+                        data_type: DataType::I64,
+
+                        data: Some(vec![2, 0, 0, 0, 0, 0, 0, 0]),
+
+                    });
+
+            
+
+                    ir.graph.nodes.push(Node {
+
+                        name: "slice1".to_string(),
+
+                        op_type: "Slice".to_string(),
+
+                        inputs: vec!["X".to_string(), "starts".to_string(), "ends".to_string(), "axes".to_string()],
+
+                        outputs: vec!["Y".to_string()],
+
+                        attributes: HashMap::new(),
+
+                    });
+
+            
+
+                    ShapeInference::infer(&mut ir).unwrap();
+
+            
+
+                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+                    assert_eq!(y_shape, Some(&vec![1, 10, 10]));
+
+                }
+
+            }
+
+            
 
     
                         
