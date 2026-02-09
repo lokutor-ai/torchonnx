@@ -32,7 +32,7 @@ impl ModelLoader for SafetensorsLoader {
                 data: Some(view.data().to_vec()),
             };
 
-            ir.weights.insert(name.clone(), tensor);
+            ir.graph.weights.insert(name.clone(), tensor);
         }
 
         Ok(ir)
@@ -63,7 +63,7 @@ mod tests {
         fs::write(&file_path, out).unwrap();
 
         let ir = SafetensorsLoader::load(&file_path).unwrap();
-        assert!(ir.weights.contains_key("weight"));
-        assert_eq!(ir.weights["weight"].shape, vec![2, 2]);
+        assert!(ir.graph.weights.contains_key("weight"));
+        assert_eq!(ir.graph.weights["weight"].shape, vec![2, 2]);
     }
 }

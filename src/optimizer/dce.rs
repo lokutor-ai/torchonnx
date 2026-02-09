@@ -11,22 +11,22 @@ impl OptimizationPass for DeadCodeElimination {
             changed = false;
             let mut used_values = HashSet::new();
             
-            for output in &ir.outputs {
+            for output in &ir.graph.outputs {
                 used_values.insert(output.name.clone());
             }
 
-            for node in &ir.nodes {
+            for node in &ir.graph.nodes {
                 for input in &node.inputs {
                     used_values.insert(input.clone());
                 }
             }
 
-            let initial_len = ir.nodes.len();
-            ir.nodes.retain(|node| {
+            let initial_len = ir.graph.nodes.len();
+            ir.graph.nodes.retain(|node: &crate::ir::Node| {
                 node.outputs.iter().any(|output| used_values.contains(output))
             });
 
-            if ir.nodes.len() != initial_len {
+            if ir.graph.nodes.len() != initial_len {
                 changed = true;
             }
         }
@@ -44,7 +44,7 @@ mod tests {
     fn test_dce_removes_unused_node() {
         let mut ir = ModelIR::new();
         
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "unused_node".to_string(),
             op_type: "Add".to_string(),
             inputs: vec!["A".to_string(), "B".to_string()],
@@ -52,7 +52,7 @@ mod tests {
             attributes: HashMap::new(),
         });
 
-        ir.outputs.push(Tensor {
+        ir.graph.outputs.push(Tensor {
             name: "Other".to_string(),
             shape: vec![1],
             data_type: DataType::F32,
@@ -62,6 +62,6 @@ mod tests {
         let dce = DeadCodeElimination;
         dce.apply(&mut ir).unwrap();
 
-        assert_eq!(ir.nodes.len(), 0);
+        assert_eq!(ir.graph.nodes.len(), 0);
     }
 }

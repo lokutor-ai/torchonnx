@@ -13,10 +13,24 @@ impl ModelExporter for OnnxExporter {
         model.ir_version = Some(onnx::Version::IrVersion as i64);
         model.producer_name = Some("torchonnx".to_string());
 
-        let mut graph = onnx::GraphProto::default();
-        graph.name = Some("torchonnx_graph".to_string());
+        model.graph = Some(Self::export_graph(&ir.graph));
 
-        for (name, tensor) in &ir.weights {
+        let mut buf = Vec::new();
+        model.encode(&mut buf).map_err(|e| ExporterError::SerializationError(e.to_string()))?;
+
+        let mut file = File::create(path).map_err(|e| ExporterError::SerializationError(e.to_string()))?;
+        file.write_all(&buf).map_err(|e| ExporterError::SerializationError(e.to_string()))?;
+
+        Ok(())
+    }
+}
+
+impl OnnxExporter {
+    fn export_graph(ir_graph: &crate::ir::Graph) -> onnx::GraphProto {
+        let mut graph = onnx::GraphProto::default();
+        graph.name = Some(ir_graph.name.clone());
+
+        for (name, tensor) in &ir_graph.weights {
             let mut tp = onnx::TensorProto::default();
             tp.name = Some(name.clone());
             tp.dims = tensor.shape.iter().map(|&d| d as i64).collect();
@@ -31,7 +45,7 @@ impl ModelExporter for OnnxExporter {
             graph.initializer.push(tp);
         }
 
-        for node in &ir.nodes {
+        for node in &ir_graph.nodes {
             let mut n = onnx::NodeProto::default();
             n.name = Some(node.name.clone());
             n.op_type = Some(node.op_type.clone());
@@ -62,21 +76,17 @@ impl ModelExporter for OnnxExporter {
                         a.ints = is.clone();
                         a.r#type = Some(onnx::attribute_proto::AttributeType::Ints as i32);
                     }
+                    crate::ir::Attribute::Graph(g) => {
+                        a.g = Some(Self::export_graph(g));
+                        a.r#type = Some(onnx::attribute_proto::AttributeType::Graph as i32);
+                    }
                 }
                 n.attribute.push(a);
             }
             graph.node.push(n);
         }
 
-        model.graph = Some(graph);
-
-        let mut buf = Vec::new();
-        model.encode(&mut buf).map_err(|e| ExporterError::SerializationError(e.to_string()))?;
-
-        let mut file = File::create(path).map_err(|e| ExporterError::SerializationError(e.to_string()))?;
-        file.write_all(&buf).map_err(|e| ExporterError::SerializationError(e.to_string()))?;
-
-        Ok(())
+        graph
     }
 }
 
@@ -90,25 +100,21 @@ mod tests {
     #[test]
     fn test_export_basic_model() {
         let mut ir = ModelIR::new();
-        
-        ir.weights.insert("w1".to_string(), Tensor {
+        ir.graph.weights.insert("w1".to_string(), Tensor {
             name: "w1".to_string(),
             shape: vec![1, 1],
             data_type: DataType::F32,
             data: Some(vec![0, 0, 128, 63]),
         });
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "add1".to_string(),
             op_type: "Add".to_string(),
             inputs: vec!["X".to_string(), "w1".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -117,18 +123,15 @@ mod tests {
     #[test]
     fn test_export_relu_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "relu1".to_string(),
             op_type: "Relu".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -137,18 +140,15 @@ mod tests {
     #[test]
     fn test_export_matmul_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "matmul1".to_string(),
             op_type: "MatMul".to_string(),
             inputs: vec!["A".to_string(), "B".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -157,21 +157,17 @@ mod tests {
     #[test]
     fn test_export_transpose_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("perm".to_string(), crate::ir::Attribute::Ints(vec![0, 2, 1]));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "transpose1".to_string(),
             op_type: "Transpose".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -180,18 +176,15 @@ mod tests {
     #[test]
     fn test_export_reshape_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "reshape1".to_string(),
             op_type: "Reshape".to_string(),
             inputs: vec!["X".to_string(), "shape".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -200,22 +193,18 @@ mod tests {
     #[test]
     fn test_export_conv_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("strides".to_string(), crate::ir::Attribute::Ints(vec![1, 1]));
         attrs.insert("pads".to_string(), crate::ir::Attribute::Ints(vec![0, 0, 0, 0]));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "conv1".to_string(),
             op_type: "Conv".to_string(),
             inputs: vec!["X".to_string(), "W".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -224,18 +213,15 @@ mod tests {
     #[test]
     fn test_export_batch_norm_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "bn1".to_string(),
             op_type: "BatchNormalization".to_string(),
             inputs: vec!["X".to_string(), "scale".to_string(), "B".to_string(), "mean".to_string(), "var".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -244,22 +230,18 @@ mod tests {
     #[test]
     fn test_export_max_pool_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("kernel_shape".to_string(), crate::ir::Attribute::Ints(vec![2, 2]));
         attrs.insert("strides".to_string(), crate::ir::Attribute::Ints(vec![2, 2]));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "pool1".to_string(),
             op_type: "MaxPool".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -268,21 +250,17 @@ mod tests {
     #[test]
     fn test_export_softmax_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("axis".to_string(), crate::ir::Attribute::Int(1));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "softmax1".to_string(),
             op_type: "Softmax".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -291,22 +269,18 @@ mod tests {
     #[test]
     fn test_export_average_pool_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("kernel_shape".to_string(), crate::ir::Attribute::Ints(vec![7, 7]));
         attrs.insert("strides".to_string(), crate::ir::Attribute::Ints(vec![1, 1]));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "pool1".to_string(),
             op_type: "AveragePool".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -315,18 +289,15 @@ mod tests {
     #[test]
     fn test_export_layer_norm_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "ln1".to_string(),
             op_type: "LayerNormalization".to_string(),
             inputs: vec!["X".to_string(), "scale".to_string(), "bias".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -335,21 +306,17 @@ mod tests {
     #[test]
     fn test_export_concat_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("axis".to_string(), crate::ir::Attribute::Int(1));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "concat1".to_string(),
             op_type: "Concat".to_string(),
             inputs: vec!["A".to_string(), "B".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -358,18 +325,15 @@ mod tests {
     #[test]
     fn test_export_global_average_pool_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "gap1".to_string(),
             op_type: "GlobalAveragePool".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -378,21 +342,17 @@ mod tests {
     #[test]
     fn test_export_flatten_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("axis".to_string(), crate::ir::Attribute::Int(1));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "flatten1".to_string(),
             op_type: "Flatten".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -401,21 +361,17 @@ mod tests {
     #[test]
     fn test_export_gemm_model() {
         let mut ir = ModelIR::new();
-        
         let mut attrs = HashMap::new();
         attrs.insert("transB".to_string(), crate::ir::Attribute::Int(1));
-
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "gemm1".to_string(),
             op_type: "Gemm".to_string(),
             inputs: vec!["A".to_string(), "W".to_string(), "B".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: attrs,
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -424,18 +380,15 @@ mod tests {
     #[test]
     fn test_export_identity_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "id1".to_string(),
             op_type: "Identity".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());
@@ -444,18 +397,15 @@ mod tests {
     #[test]
     fn test_export_gelu_model() {
         let mut ir = ModelIR::new();
-        
-        ir.nodes.push(Node {
+        ir.graph.nodes.push(Node {
             name: "gelu1".to_string(),
             op_type: "Gelu".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
-
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("model.onnx");
-        
         let result = OnnxExporter::export(&ir, &file_path);
         assert!(result.is_ok());
         assert!(file_path.exists());

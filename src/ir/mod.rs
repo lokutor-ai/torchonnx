@@ -33,21 +33,22 @@ pub enum Attribute {
     String(String),
     Floats(Vec<f32>),
     Ints(Vec<i64>),
+    Graph(Box<Graph>),
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelIR {
+pub struct Graph {
+    pub name: String,
     pub nodes: Vec<Node>,
     pub weights: HashMap<String, Tensor>,
     pub inputs: Vec<Tensor>,
     pub outputs: Vec<Tensor>,
 }
 
-pub mod shape_inference;
-
-impl ModelIR {
-    pub fn new() -> Self {
+impl Graph {
+    pub fn new(name: String) -> Self {
         Self {
+            name,
             nodes: Vec::new(),
             weights: HashMap::new(),
             inputs: Vec::new(),
@@ -55,3 +56,18 @@ impl ModelIR {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct ModelIR {
+    pub graph: Graph,
+}
+
+impl ModelIR {
+    pub fn new() -> Self {
+        Self {
+            graph: Graph::new("main_graph".to_string()),
+        }
+    }
+}
+
+pub mod shape_inference;
