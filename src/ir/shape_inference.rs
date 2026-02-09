@@ -20,7 +20,7 @@ impl ShapeInference {
 
         for node in &ir.graph.nodes {
             match node.op_type.as_str() {
-                "Add" => {
+                "Add" | "Sub" | "Mul" | "Div" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
                         .clone();
@@ -33,7 +33,7 @@ impl ShapeInference {
                         data: None,
                     });
                 }
-                "Relu" => {
+                "Relu" | "Sigmoid" | "Tanh" | "Erf" | "Gelu" | "Identity" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
                         .clone();
@@ -190,7 +190,7 @@ impl ShapeInference {
                         data: None,
                     });
                 }
-                "MaxPool" => {
+                "MaxPool" | "AveragePool" => {
                     let shape_x = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
                     
@@ -227,7 +227,7 @@ impl ShapeInference {
                         data: None,
                     });
                 }
-                "BatchNormalization" => {
+                "BatchNormalization" | "InstanceNormalization" | "LayerNormalization" | "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
                         .clone();
@@ -236,56 +236,6 @@ impl ShapeInference {
                     inferred_tensors.push(Tensor {
                         name: node.outputs[0].clone(),
                         shape,
-                        data_type: DataType::F32,
-                        data: None,
-                    });
-                }
-                "InstanceNormalization" => {
-                    let shape = value_shapes.get(&node.inputs[0])
-                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
-                        .clone();
-
-                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
-                    inferred_tensors.push(Tensor {
-                        name: node.outputs[0].clone(),
-                        shape,
-                        data_type: DataType::F32,
-                        data: None,
-                    });
-                }
-                "AveragePool" => {
-                    let shape_x = value_shapes.get(&node.inputs[0])
-                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
-                    
-                    let kernel_shape = match node.attributes.get("kernel_shape") {
-                        Some(crate::ir::Attribute::Ints(k)) => k.clone(),
-                        _ => vec![1, 1],
-                    };
-                    let strides = match node.attributes.get("strides") {
-                        Some(crate::ir::Attribute::Ints(s)) => s.clone(),
-                        _ => vec![1, 1],
-                    };
-                    let pads = match node.attributes.get("pads") {
-                        Some(crate::ir::Attribute::Ints(p)) => p.clone(),
-                        _ => vec![0, 0, 0, 0],
-                    };
-
-                    let n = shape_x[0];
-                    let c = shape_x[1];
-                    let h_in = shape_x[2];
-                    let w_in = shape_x[3];
-                    let k_h = kernel_shape[0] as usize;
-                    let k_w = kernel_shape[1] as usize;
-
-                    let h_out = (h_in + pads[0] as usize + pads[2] as usize - k_h) / strides[0] as usize + 1;
-                    let w_out = (w_in + pads[1] as usize + pads[3] as usize - k_w) / strides[1] as usize + 1;
-
-                    let output_shape = vec![n, c, h_out, w_out];
-
-                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
-                    inferred_tensors.push(Tensor {
-                        name: node.outputs[0].clone(),
-                        shape: output_shape,
                         data_type: DataType::F32,
                         data: None,
                     });
@@ -360,32 +310,6 @@ impl ShapeInference {
                     inferred_tensors.push(Tensor {
                         name: node.outputs[0].clone(),
                         shape: output_shape,
-                        data_type: DataType::F32,
-                        data: None,
-                    });
-                }
-                "Identity" => {
-                    let shape = value_shapes.get(&node.inputs[0])
-                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
-                        .clone();
-
-                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
-                    inferred_tensors.push(Tensor {
-                        name: node.outputs[0].clone(),
-                        shape,
-                        data_type: DataType::F32,
-                        data: None,
-                    });
-                }
-                "Gelu" => {
-                    let shape = value_shapes.get(&node.inputs[0])
-                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
-                        .clone();
-
-                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
-                    inferred_tensors.push(Tensor {
-                        name: node.outputs[0].clone(),
-                        shape,
                         data_type: DataType::F32,
                         data: None,
                     });
@@ -783,32 +707,6 @@ impl ShapeInference {
                     inferred_tensors.push(Tensor {
                         name: node.outputs[0].clone(),
                         shape: output_shape,
-                        data_type: DataType::F32,
-                        data: None,
-                    });
-                }
-                "Softmax" => {
-                    let shape = value_shapes.get(&node.inputs[0])
-                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
-                        .clone();
-
-                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
-                    inferred_tensors.push(Tensor {
-                        name: node.outputs[0].clone(),
-                        shape,
-                        data_type: DataType::F32,
-                        data: None,
-                    });
-                }
-                "LayerNormalization" => {
-                    let shape = value_shapes.get(&node.inputs[0])
-                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
-                        .clone();
-
-                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
-                    inferred_tensors.push(Tensor {
-                        name: node.outputs[0].clone(),
-                        shape,
                         data_type: DataType::F32,
                         data: None,
                     });
@@ -1665,5 +1563,26 @@ mod tests {
         ShapeInference::infer(&mut ir).unwrap();
         let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
         assert_eq!(y_shape, Some(&vec![1, 3, 226, 226]));
+    }
+
+    #[test]
+    fn test_infer_erf_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 512],
+            data_type: DataType::F32,
+            data: None,
+        });
+        ir.graph.nodes.push(Node {
+            name: "erf1".to_string(),
+            op_type: "Erf".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 512]));
     }
 }
