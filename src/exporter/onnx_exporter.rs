@@ -486,9 +486,32 @@ mod tests {
                                         let dir = tempdir().unwrap();
                                         let file_path = dir.path().join("model.onnx");
                                         
-                                        let result = OnnxExporter::export(&ir, &file_path);
-                                        assert!(result.is_ok());
-                                        assert!(file_path.exists());
-                                    }
-                                }
-                                
+                                                let result = OnnxExporter::export(&ir, &file_path);
+                                                assert!(result.is_ok());
+                                                assert!(file_path.exists());
+                                            }
+                                        
+                                            #[test]
+                                            fn test_export_split_model() {
+                                                let mut ir = ModelIR::new();
+                                                
+                                                let mut attrs = HashMap::new();
+                                                attrs.insert("axis".to_string(), crate::ir::Attribute::Int(1));
+                                        
+                                                ir.graph.nodes.push(Node {
+                                                    name: "split1".to_string(),
+                                                    op_type: "Split".to_string(),
+                                                    inputs: vec!["X".to_string()],
+                                                    outputs: vec!["Y1".to_string(), "Y2".to_string()],
+                                                    attributes: attrs,
+                                                });
+                                        
+                                                let dir = tempdir().unwrap();
+                                                let file_path = dir.path().join("model.onnx");
+                                                
+                                                let result = OnnxExporter::export(&ir, &file_path);
+                                                assert!(result.is_ok());
+                                                assert!(file_path.exists());
+                                            }
+                                        }
+                                        
