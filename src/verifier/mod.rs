@@ -16,33 +16,69 @@ pub trait ParityChecker {
     fn check_parity(
         ir: &ModelIR,
         onnx_path: &Path,
+        inputs: HashMap<String, crate::ir::Tensor>,
         epsilon: f32,
     ) -> Result<(), VerifierError>;
 }
 
 pub struct OnnxVerifier;
 
+use std::collections::HashMap;
+
 impl ParityChecker for OnnxVerifier {
     fn check_parity(
         ir: &ModelIR,
         onnx_path: &Path,
-        _epsilon: f32,
+        inputs: HashMap<String, crate::ir::Tensor>,
+        epsilon: f32,
     ) -> Result<(), VerifierError> {
         let mut session = Session::builder()
             .map_err(|e| VerifierError::InferenceError(format!("{:?}", e)))?
             .commit_from_file(onnx_path)
             .map_err(|e| VerifierError::InferenceError(format!("{:?}", e)))?;
 
-        let mut inputs = Vec::new();
-        for input_ir in &ir.graph.inputs {
-            let total_elements: usize = input_ir.shape.iter().product();
-            let mut rng = rand::thread_rng();
-            let data: Vec<f32> = (0..total_elements).map(|_| rng.gen_range(-1.0..1.0)).collect();
-            inputs.push((input_ir.name.clone(), ort::value::Value::from_array((input_ir.shape.clone(), data.into_boxed_slice())).unwrap()));
+        let mut ort_inputs = Vec::new();
+        for (name, tensor) in &inputs {
+            if let Some(ref data) = tensor.data {
+                let val = match tensor.data_type {
+                    DataType::F32 => {
+                        let f32_data: &[f32] = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len() / 4) };
+                        ort::value::Value::from_array((tensor.shape.clone(), f32_data.to_vec().into_boxed_slice())).unwrap()
+                    }
+                    _ => return Err(VerifierError::InferenceError("Unsupported verifier data type".to_string())),
+                };
+                ort_inputs.push((name.clone(), val));
+            }
         }
 
-        let _outputs = session.run(inputs.into_iter().collect::<Vec<_>>())
+        let outputs = session.run(ort_inputs.into_iter().collect::<Vec<_>>())
             .map_err(|e| VerifierError::InferenceError(format!("{:?}", e)))?;
+
+        for (name, expected) in &ir.graph.expected_outputs {
+            let actual = outputs.get(name).ok_or_else(|| VerifierError::ParityError(format!("Output {} not found in ONNX result", name)))?;
+            
+            // Extract data from actual (Value)
+            // In ort 2.0, try_extract_tensor returns Result<(&Shape, &[T])>
+            let (_shape, actual_data) = actual.try_extract_tensor::<f32>()
+                .map_err(|e| VerifierError::InferenceError(format!("{:?}", e)))?;
+            
+            let expected_data: &[f32] = unsafe { 
+                std::slice::from_raw_parts(
+                    expected.data.as_ref().unwrap().as_ptr() as *const f32, 
+                    expected.data.as_ref().unwrap().len() / 4
+                ) 
+            };
+
+            if actual_data.len() != expected_data.len() {
+                return Err(VerifierError::ParityError(format!("Output {} length mismatch: got {}, expected {}", name, actual_data.len(), expected_data.len())));
+            }
+
+            for j in 0..actual_data.len() {
+                if (actual_data[j] - expected_data[j]).abs() > epsilon {
+                    return Err(VerifierError::ParityError(format!("Output {} numerical mismatch at index {}: got {}, expected {}", name, j, actual_data[j], expected_data[j])));
+                }
+            }
+        }
 
         Ok(())
     }
@@ -62,7 +98,7 @@ mod tests {
         let mut ir = ModelIR::new();
         ir.graph.inputs.push(Tensor {
             name: "X".to_string(),
-            shape: vec![1, 10],
+            shape: vec![1, 2],
             data_type: DataType::F32,
             data: None,
         });
@@ -73,11 +109,39 @@ mod tests {
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
+        ir.graph.outputs.push(Tensor {
+            name: "Y".to_string(),
+            shape: vec![1, 2],
+            data_type: DataType::F32,
+            data: None,
+        });
+
+        let input_data = vec![1.0f32, 2.0f32];
+        let input_bytes: Vec<u8> = unsafe { std::slice::from_raw_parts(input_data.as_ptr() as *const u8, 8).to_vec() };
+        
+        let mut inputs = HashMap::new();
+        inputs.insert("X".to_string(), Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 2],
+            data_type: DataType::F32,
+            data: Some(input_bytes.clone()),
+        });
+
+        ir.graph.expected_outputs.insert("Y".to_string(), Tensor {
+            name: "Y".to_string(),
+            shape: vec![1, 2],
+            data_type: DataType::F32,
+            data: Some(input_bytes),
+        });
 
         let dir = tempdir().unwrap();
         let onnx_path = dir.path().join("model.onnx");
         OnnxExporter::export(&ir, &onnx_path).unwrap();
 
-        let _result = OnnxVerifier::check_parity(&ir, &onnx_path, 1e-5);
+        let result = OnnxVerifier::check_parity(&ir, &onnx_path, inputs, 1e-5);
+        if let Err(ref e) = result {
+            println!("Verifier Error: {:?}", e);
+        }
+        assert!(result.is_ok());
     }
 }

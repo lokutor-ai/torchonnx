@@ -44,6 +44,7 @@ pub struct Graph {
     pub weights: HashMap<String, Tensor>,
     pub inputs: Vec<Tensor>,
     pub outputs: Vec<Tensor>,
+    pub expected_outputs: HashMap<String, Tensor>,
 }
 
 impl Graph {
@@ -54,6 +55,7 @@ impl Graph {
             weights: HashMap::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
+            expected_outputs: HashMap::new(),
         }
     }
 }

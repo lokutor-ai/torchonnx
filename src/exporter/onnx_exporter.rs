@@ -10,10 +10,15 @@ pub struct OnnxExporter;
 impl ModelExporter for OnnxExporter {
     fn export(ir: &ModelIR, path: &Path) -> Result<(), ExporterError> {
         let mut model = onnx::ModelProto::default();
-        model.ir_version = Some(onnx::Version::IrVersion as i64);
+        model.ir_version = Some(7);
         model.producer_name = Some("torchonnx".to_string());
 
         model.graph = Some(Self::export_graph(&ir.graph));
+
+        let mut opset = onnx::OperatorSetIdProto::default();
+        opset.domain = Some("".to_string());
+        opset.version = Some(15); // Use a modern opset version
+        model.opset_import.push(opset);
 
         let mut buf = Vec::new();
         model.encode(&mut buf).map_err(|e| ExporterError::SerializationError(e.to_string()))?;
@@ -43,6 +48,54 @@ impl OnnxExporter {
             });
             tp.raw_data = Some(tensor.data.clone().unwrap_or_default());
             graph.initializer.push(tp);
+        }
+
+        for input in &ir_graph.inputs {
+            let mut vi = onnx::ValueInfoProto::default();
+            vi.name = Some(input.name.clone());
+            let mut ty = onnx::TypeProto::default();
+            let mut ten = onnx::type_proto::Tensor::default();
+            ten.elem_type = Some(match input.data_type {
+                crate::ir::DataType::F32 => onnx::tensor_proto::DataType::Float as i32,
+                crate::ir::DataType::F64 => onnx::tensor_proto::DataType::Double as i32,
+                crate::ir::DataType::I32 => onnx::tensor_proto::DataType::Int32 as i32,
+                crate::ir::DataType::I64 => onnx::tensor_proto::DataType::Int64 as i32,
+                crate::ir::DataType::U8 => onnx::tensor_proto::DataType::Uint8 as i32,
+            });
+            let mut sh = onnx::TensorShapeProto::default();
+            for &d in &input.shape {
+                let mut dim = onnx::tensor_shape_proto::Dimension::default();
+                dim.value = Some(onnx::tensor_shape_proto::dimension::Value::DimValue(d as i64));
+                sh.dim.push(dim);
+            }
+            ten.shape = Some(sh);
+            ty.value = Some(onnx::type_proto::Value::TensorType(ten));
+            vi.r#type = Some(ty);
+            graph.input.push(vi);
+        }
+
+        for output in &ir_graph.outputs {
+            let mut vi = onnx::ValueInfoProto::default();
+            vi.name = Some(output.name.clone());
+            let mut ty = onnx::TypeProto::default();
+            let mut ten = onnx::type_proto::Tensor::default();
+            ten.elem_type = Some(match output.data_type {
+                crate::ir::DataType::F32 => onnx::tensor_proto::DataType::Float as i32,
+                crate::ir::DataType::F64 => onnx::tensor_proto::DataType::Double as i32,
+                crate::ir::DataType::I32 => onnx::tensor_proto::DataType::Int32 as i32,
+                crate::ir::DataType::I64 => onnx::tensor_proto::DataType::Int64 as i32,
+                crate::ir::DataType::U8 => onnx::tensor_proto::DataType::Uint8 as i32,
+            });
+            let mut sh = onnx::TensorShapeProto::default();
+            for &d in &output.shape {
+                let mut dim = onnx::tensor_shape_proto::Dimension::default();
+                dim.value = Some(onnx::tensor_shape_proto::dimension::Value::DimValue(d as i64));
+                sh.dim.push(dim);
+            }
+            ten.shape = Some(sh);
+            ty.value = Some(onnx::type_proto::Value::TensorType(ten));
+            vi.r#type = Some(ty);
+            graph.output.push(vi);
         }
 
         for node in &ir_graph.nodes {
