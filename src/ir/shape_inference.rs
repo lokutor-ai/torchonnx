@@ -762,6 +762,31 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Pad" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let pads_tensor = ir.graph.weights.get(&node.inputs[1])
+                        .ok_or_else(|| OptimizerError::Error("Pad pads must be constant for now".to_string()))?;
+                    let data = pads_tensor.data.as_ref().unwrap();
+                    let mut pads = Vec::new();
+                    for j in 0..pads_tensor.shape[0] {
+                        pads.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                    }
+
+                    let mut output_shape = Vec::new();
+                    for i in 0..shape.len() {
+                        output_shape.push((shape[i] as i64 + pads[i] + pads[i + shape.len()]) as usize);
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1597,12 +1622,48 @@ mod tests {
         ir.graph.nodes.push(Node {
             name: "in1".to_string(),
             op_type: "InstanceNormalization".to_string(),
-            inputs: vec!["X".to_string(), "scale".to_string(), "B".to_string()],
+            inputs: vec!["X".to_string(), "scale".to_string(), "bias".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
         ShapeInference::infer(&mut ir).unwrap();
         let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
         assert_eq!(y_shape, Some(&vec![1, 16, 112, 112]));
+    }
+
+    #[test]
+    fn test_infer_pad_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 3, 224, 224],
+            data_type: DataType::F32,
+            data: None,
+        });
+        ir.graph.weights.insert("pads".to_string(), Tensor {
+            name: "pads".to_string(),
+            shape: vec![8],
+            data_type: DataType::I64,
+            data: Some(vec![
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0,
+            ]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "pad1".to_string(),
+            op_type: "Pad".to_string(),
+            inputs: vec!["X".to_string(), "pads".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 3, 226, 226]));
     }
 }
