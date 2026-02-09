@@ -377,6 +377,49 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Scan" => {
+                    let num_scan_inputs = match node.attributes.get("num_scan_inputs") {
+                        Some(crate::ir::Attribute::Int(i)) => *i as usize,
+                        _ => 1,
+                    };
+
+                    let num_states = node.inputs.len() - num_scan_inputs;
+                    let seq_len = value_shapes.get(&node.inputs[num_states])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[num_states])))?[0];
+
+                    for i in 0..num_states {
+                        let state_shape = value_shapes.get(&node.inputs[i])
+                            .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[i])))?
+                            .clone();
+                        
+                        value_shapes.insert(node.outputs[i].clone(), state_shape.clone());
+                        inferred_tensors.push(Tensor {
+                            name: node.outputs[i].clone(),
+                            shape: state_shape,
+                            data_type: DataType::F32,
+                            data: None,
+                        });
+                    }
+
+                    for i in 0..(node.outputs.len() - num_states) {
+                        let out_idx = num_states + i;
+                        let state_shape = value_shapes.get(&node.inputs[0])
+                            .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                        
+                        let mut seq_shape = vec![seq_len];
+                        for &d in state_shape {
+                            seq_shape.push(d);
+                        }
+
+                        value_shapes.insert(node.outputs[out_idx].clone(), seq_shape.clone());
+                        inferred_tensors.push(Tensor {
+                            name: node.outputs[out_idx].clone(),
+                            shape: seq_shape,
+                            data_type: DataType::F32,
+                            data: None,
+                        });
+                    }
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -906,8 +949,43 @@ mod tests {
                 
                         ShapeInference::infer(&mut ir).unwrap();
                 
-                        let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                        assert_eq!(y_shape, Some(&vec![1, 512]));
-                    }
-                }
-                
+                                let y_shape = ir.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                assert_eq!(y_shape, Some(&vec![1, 512]));
+                            }
+                        
+                            #[test]
+                            fn test_infer_scan_shape() {
+                                let mut ir = ModelIR::new();
+                                
+                                ir.inputs.push(Tensor {
+                                    name: "initial_h".to_string(),
+                                    shape: vec![1, 128],
+                                    data_type: DataType::F32,
+                                    data: None,
+                                });
+                        
+                                ir.inputs.push(Tensor {
+                                    name: "x_seq".to_string(),
+                                    shape: vec![10, 1, 64],
+                                    data_type: DataType::F32,
+                                    data: None,
+                                });
+                        
+                                ir.nodes.push(Node {
+                                    name: "scan1".to_string(),
+                                    op_type: "Scan".to_string(),
+                                    inputs: vec!["initial_h".to_string(), "x_seq".to_string()],
+                                    outputs: vec!["final_h".to_string(), "y_seq".to_string()],
+                                    attributes: HashMap::new(),
+                                });
+                        
+                                ShapeInference::infer(&mut ir).unwrap();
+                        
+                                let final_h_shape = ir.outputs.iter().find(|t| t.name == "final_h").map(|t| &t.shape);
+                                let y_seq_shape = ir.outputs.iter().find(|t| t.name == "y_seq").map(|t| &t.shape);
+                                
+                                assert_eq!(final_h_shape, Some(&vec![1, 128]));
+                                assert_eq!(y_seq_shape, Some(&vec![10, 1, 128]));
+                            }
+                        }
+                        
