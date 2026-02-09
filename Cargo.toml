@@ -14,6 +14,7 @@ serde-pickle = "1.2"
 prost = "0.12"
 ndarray = "0.15"
 ort = "2.0.0-rc.11"
+rand = "0.8"
 
 [build-dependencies]
 prost-build = "0.12"

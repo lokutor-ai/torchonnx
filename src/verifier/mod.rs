@@ -1,7 +1,8 @@
-use crate::ir::ModelIR;
+use crate::ir::{ModelIR, DataType};
 use thiserror::Error;
 use std::path::Path;
 use ort::session::Session;
+use rand::Rng;
 
 #[derive(Error, Debug)]
 pub enum VerifierError {
@@ -23,13 +24,24 @@ pub struct OnnxVerifier;
 
 impl ParityChecker for OnnxVerifier {
     fn check_parity(
-        _ir: &ModelIR,
+        ir: &ModelIR,
         onnx_path: &Path,
         _epsilon: f32,
     ) -> Result<(), VerifierError> {
-        let _session = Session::builder()
+        let mut session = Session::builder()
             .map_err(|e| VerifierError::InferenceError(format!("{:?}", e)))?
             .commit_from_file(onnx_path)
+            .map_err(|e| VerifierError::InferenceError(format!("{:?}", e)))?;
+
+        let mut inputs = Vec::new();
+        for input_ir in &ir.graph.inputs {
+            let total_elements: usize = input_ir.shape.iter().product();
+            let mut rng = rand::thread_rng();
+            let data: Vec<f32> = (0..total_elements).map(|_| rng.gen_range(-1.0..1.0)).collect();
+            inputs.push((input_ir.name.clone(), ort::value::Value::from_array((input_ir.shape.clone(), data.into_boxed_slice())).unwrap()));
+        }
+
+        let _outputs = session.run(inputs.into_iter().collect::<Vec<_>>())
             .map_err(|e| VerifierError::InferenceError(format!("{:?}", e)))?;
 
         Ok(())
@@ -39,7 +51,7 @@ impl ParityChecker for OnnxVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{ModelIR, Node};
+    use crate::ir::{ModelIR, Node, Tensor, DataType};
     use crate::exporter::onnx_exporter::OnnxExporter;
     use crate::exporter::ModelExporter;
     use tempfile::tempdir;
@@ -48,6 +60,12 @@ mod tests {
     #[test]
     fn test_verifier_loads_model() {
         let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 10],
+            data_type: DataType::F32,
+            data: None,
+        });
         ir.graph.nodes.push(Node {
             name: "id1".to_string(),
             op_type: "Identity".to_string(),
