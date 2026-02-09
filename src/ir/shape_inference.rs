@@ -1620,7 +1620,50 @@ mod tests {
             attributes: HashMap::new(),
         });
         ShapeInference::infer(&mut ir).unwrap();
-        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-        assert_eq!(y_shape, Some(&vec![1, 512]));
-    }
-}
+                let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                assert_eq!(y_shape, Some(&vec![1, 512]));
+            }
+        
+            #[test]
+            fn test_infer_sigmoid_shape() {
+                let mut ir = ModelIR::new();
+                ir.graph.inputs.push(Tensor {
+                    name: "X".to_string(),
+                    shape: vec![1, 512],
+                    data_type: DataType::F32,
+                    data: None,
+                });
+                ir.graph.nodes.push(Node {
+                    name: "sig1".to_string(),
+                    op_type: "Sigmoid".to_string(),
+                    inputs: vec!["X".to_string()],
+                    outputs: vec!["Y".to_string()],
+                    attributes: HashMap::new(),
+                });
+                ShapeInference::infer(&mut ir).unwrap();
+                let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                assert_eq!(y_shape, Some(&vec![1, 512]));
+            }
+        
+            #[test]
+            fn test_infer_tanh_shape() {
+                let mut ir = ModelIR::new();
+                ir.graph.inputs.push(Tensor {
+                    name: "X".to_string(),
+                    shape: vec![1, 512],
+                    data_type: DataType::F32,
+                    data: None,
+                });
+                ir.graph.nodes.push(Node {
+                    name: "tanh1".to_string(),
+                    op_type: "Tanh".to_string(),
+                    inputs: vec!["X".to_string()],
+                    outputs: vec!["Y".to_string()],
+                    attributes: HashMap::new(),
+                });
+                ShapeInference::infer(&mut ir).unwrap();
+                let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                assert_eq!(y_shape, Some(&vec![1, 512]));
+            }
+        }
+        
