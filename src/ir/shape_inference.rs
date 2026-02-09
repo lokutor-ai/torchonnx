@@ -665,6 +665,20 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Shape" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let output_shape = vec![shape.len()];
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::I64,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1422,8 +1436,33 @@ mod tests {
                     
                             ShapeInference::infer(&mut ir).unwrap();
                     
-                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                            assert_eq!(y_shape, Some(&vec![1, 3, 448, 448]));
-                        }
-                    }
-                    
+                                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                    assert_eq!(y_shape, Some(&vec![1, 3, 448, 448]));
+                                }
+                            
+                                #[test]
+                                fn test_infer_shape_op_shape() {
+                                    let mut ir = ModelIR::new();
+                                    
+                                    ir.graph.inputs.push(Tensor {
+                                        name: "X".to_string(),
+                                        shape: vec![1, 3, 224, 224],
+                                        data_type: DataType::F32,
+                                        data: None,
+                                    });
+                            
+                                    ir.graph.nodes.push(Node {
+                                        name: "shape1".to_string(),
+                                        op_type: "Shape".to_string(),
+                                        inputs: vec!["X".to_string()],
+                                        outputs: vec!["Y".to_string()],
+                                        attributes: HashMap::new(),
+                                    });
+                            
+                                    ShapeInference::infer(&mut ir).unwrap();
+                            
+                                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                    assert_eq!(y_shape, Some(&vec![4]));
+                                }
+                            }
+                            
