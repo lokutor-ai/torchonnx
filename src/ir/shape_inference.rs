@@ -482,6 +482,44 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Squeeze" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let axes = if node.inputs.len() > 1 {
+                        let axes_tensor = ir.graph.weights.get(&node.inputs[1])
+                            .ok_or_else(|| OptimizerError::Error("Squeeze axes must be constant for now".to_string()))?;
+                        let data = axes_tensor.data.as_ref().unwrap();
+                        let mut res = Vec::new();
+                        for j in 0..axes_tensor.shape[0] {
+                            res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                        }
+                        res
+                    } else {
+                        let mut res = Vec::new();
+                        for (i, &d) in shape.iter().enumerate() {
+                            if d == 1 { res.push(i as i64); }
+                        }
+                        res
+                    };
+
+                    let mut output_shape = Vec::new();
+                    let axes_set: std::collections::HashSet<usize> = axes.iter().map(|&a| if a < 0 { (shape.len() as i64 + a) as usize } else { a as usize }).collect();
+                    
+                    for i in 0..shape.len() {
+                        if !axes_set.contains(&i) {
+                            output_shape.push(shape[i]);
+                        }
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1602,13 +1640,151 @@ mod tests {
 
             
 
-                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
-                    assert_eq!(y_shape, Some(&vec![1, 10, 10]));
+            
 
-                }
+                            assert_eq!(y_shape, Some(&vec![1, 10, 10]));
 
-            }
+            
+
+                        }
+
+            
+
+                    
+
+            
+
+                        #[test]
+
+            
+
+                        fn test_infer_squeeze_shape() {
+
+            
+
+                            let mut ir = ModelIR::new();
+
+            
+
+                            
+
+            
+
+                            ir.graph.inputs.push(Tensor {
+
+            
+
+                                name: "X".to_string(),
+
+            
+
+                                shape: vec![1, 10, 1, 20],
+
+            
+
+                                data_type: DataType::F32,
+
+            
+
+                                data: None,
+
+            
+
+                            });
+
+            
+
+                    
+
+            
+
+                            ir.graph.weights.insert("axes".to_string(), Tensor {
+
+            
+
+                                name: "axes".to_string(),
+
+            
+
+                                shape: vec![2],
+
+            
+
+                                data_type: DataType::I64,
+
+            
+
+                                data: Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]),
+
+            
+
+                            });
+
+            
+
+                    
+
+            
+
+                            ir.graph.nodes.push(Node {
+
+            
+
+                                name: "squeeze1".to_string(),
+
+            
+
+                                op_type: "Squeeze".to_string(),
+
+            
+
+                                inputs: vec!["X".to_string(), "axes".to_string()],
+
+            
+
+                                outputs: vec!["Y".to_string()],
+
+            
+
+                                attributes: HashMap::new(),
+
+            
+
+                            });
+
+            
+
+                    
+
+            
+
+                            ShapeInference::infer(&mut ir).unwrap();
+
+            
+
+                    
+
+            
+
+                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+            
+
+                            assert_eq!(y_shape, Some(&vec![10, 20]));
+
+            
+
+                        }
+
+            
+
+                    }
+
+            
+
+                    
 
             
 
