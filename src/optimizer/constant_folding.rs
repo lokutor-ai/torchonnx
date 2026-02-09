@@ -170,6 +170,50 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Clip" {
+                let a = &ir.graph.weights[&node.inputs[0]];
+                if a.data_type == DataType::F32 {
+                    let mut min_val = f32::NEG_INFINITY;
+                    if node.inputs.len() > 1 && !node.inputs[1].is_empty() {
+                        let min_w = &ir.graph.weights[&node.inputs[1]];
+                        min_val = f32::from_le_bytes(min_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+                    }
+                    let mut max_val = f32::INFINITY;
+                    if node.inputs.len() > 2 && !node.inputs[2].is_empty() {
+                        let max_w = &ir.graph.weights[&node.inputs[2]];
+                        max_val = f32::from_le_bytes(max_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+                    }
+
+                    let a_data: &[f32] = unsafe {
+                        std::slice::from_raw_parts(
+                            a.data.as_ref().unwrap().as_ptr() as *const f32,
+                            a.data.as_ref().unwrap().len() / 4,
+                        )
+                    };
+
+                    let mut res_data = Vec::with_capacity(a_data.len());
+                    for &val in a_data {
+                        res_data.push(val.clamp(min_val, max_val));
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let output_name = node.outputs[0].clone();
+                    ir.graph.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: a.shape.clone(),
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.graph.nodes.remove(i);
+                    continue;
+                }
             } else if all_constants && node.op_type == "Softmax" {
                 let a = &ir.graph.weights[&node.inputs[0]];
                 if a.data_type == DataType::F32 {
@@ -195,16 +239,16 @@ impl OptimizationPass for ConstantFolding {
 
                     for outer in 0..outer_size {
                         for inner in 0..inner_size {
-                            let mut max_val = f32::NEG_INFINITY;
+                            let mut max_v = f32::NEG_INFINITY;
                             for k in 0..axis_size {
                                 let idx = outer * axis_size * inner_size + k * inner_size + inner;
-                                if a_data[idx] > max_val { max_val = a_data[idx]; }
+                                if a_data[idx] > max_v { max_v = a_data[idx]; }
                             }
 
                             let mut sum_exp = 0.0f32;
                             for k in 0..axis_size {
                                 let idx = outer * axis_size * inner_size + k * inner_size + inner;
-                                res_data[idx] = (a_data[idx] - max_val).exp();
+                                res_data[idx] = (a_data[idx] - max_v).exp();
                                 sum_exp += res_data[idx];
                             }
 
@@ -1346,5 +1390,44 @@ mod tests {
         let res_w = &ir.graph.weights["B"];
         let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
         assert!((res_data - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_clip() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![3],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 191, 0, 0, 64, 64, 0, 0, 160, 64]), // [-1.0, 3.0, 5.0]
+        });
+        ir.graph.weights.insert("min".to_string(), Tensor {
+            name: "min".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 0]), // 0.0
+        });
+        ir.graph.weights.insert("max".to_string(), Tensor {
+            name: "max".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 128, 64]), // 4.0
+        });
+        ir.graph.nodes.push(Node {
+            name: "clip".to_string(),
+            op_type: "Clip".to_string(),
+            inputs: vec!["A".to_string(), "min".to_string(), "max".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        let res_w = &ir.graph.weights["B"];
+        let res_data: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(res_w.data.as_ref().unwrap().as_ptr() as *const f32, 3).to_vec()
+        };
+        assert_eq!(res_data, vec![0.0, 3.0, 4.0]);
     }
 }
