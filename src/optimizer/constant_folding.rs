@@ -10,7 +10,7 @@ impl OptimizationPass for ConstantFolding {
             let node = &ir.graph.nodes[i];
             let mut all_constants = true;
             for input in &node.inputs {
-                if !ir.graph.weights.contains_key(input) {
+                if !input.is_empty() && !ir.graph.weights.contains_key(input) {
                     all_constants = false;
                     break;
                 }
@@ -130,6 +130,45 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && (node.op_type == "Relu" || node.op_type == "Sigmoid" || node.op_type == "Tanh") {
+                let a = &ir.graph.weights[&node.inputs[0]];
+                if a.data_type == DataType::F32 {
+                    let a_data: &[f32] = unsafe {
+                        std::slice::from_raw_parts(
+                            a.data.as_ref().unwrap().as_ptr() as *const f32,
+                            a.data.as_ref().unwrap().len() / 4,
+                        )
+                    };
+
+                    let mut res_data = Vec::with_capacity(a_data.len());
+                    for &val in a_data {
+                        if node.op_type == "Relu" {
+                            res_data.push(if val > 0.0 { val } else { 0.0 });
+                        } else if node.op_type == "Sigmoid" {
+                            res_data.push(1.0 / (1.0 + (-val).exp()));
+                        } else {
+                            res_data.push(val.tanh());
+                        }
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let output_name = node.outputs[0].clone();
+                    ir.graph.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: a.shape.clone(),
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.graph.nodes.remove(i);
+                    continue;
+                }
             } else if all_constants && node.op_type == "Softmax" {
                 let a = &ir.graph.weights[&node.inputs[0]];
                 if a.data_type == DataType::F32 {
@@ -173,39 +212,6 @@ impl OptimizationPass for ConstantFolding {
                                 res_data[idx] /= sum_exp;
                             }
                         }
-                    }
-
-                    let res_bytes: Vec<u8> = unsafe {
-                        std::slice::from_raw_parts(
-                            res_data.as_ptr() as *const u8,
-                            res_data.len() * 4,
-                        )
-                    }.to_vec();
-
-                    let output_name = node.outputs[0].clone();
-                    ir.graph.weights.insert(output_name.clone(), Tensor {
-                        name: output_name,
-                        shape: a.shape.clone(),
-                        data_type: DataType::F32,
-                        data: Some(res_bytes),
-                    });
-
-                    ir.graph.nodes.remove(i);
-                    continue;
-                }
-            } else if all_constants && node.op_type == "Relu" {
-                let a = &ir.graph.weights[&node.inputs[0]];
-                if a.data_type == DataType::F32 {
-                    let a_data: &[f32] = unsafe {
-                        std::slice::from_raw_parts(
-                            a.data.as_ref().unwrap().as_ptr() as *const f32,
-                            a.data.as_ref().unwrap().len() / 4,
-                        )
-                    };
-
-                    let mut res_data = Vec::with_capacity(a_data.len());
-                    for &val in a_data {
-                        res_data.push(if val > 0.0 { val } else { 0.0 });
                     }
 
                     let res_bytes: Vec<u8> = unsafe {
@@ -1239,5 +1245,55 @@ mod tests {
             std::slice::from_raw_parts(res2_w.data.as_ref().unwrap().as_ptr() as *const f32, 2).to_vec()
         };
         assert_eq!(res2_data, vec![3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_constant_folding_sigmoid() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "sig".to_string(),
+            op_type: "Sigmoid".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        let res_w = &ir.graph.weights["B"];
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_constant_folding_tanh() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("A".to_string(), Tensor {
+            name: "A".to_string(),
+            shape: vec![1],
+            data_type: DataType::F32,
+            data: Some(vec![0, 0, 0, 0]),
+        });
+        ir.graph.nodes.push(Node {
+            name: "tanh".to_string(),
+            op_type: "Tanh".to_string(),
+            inputs: vec!["A".to_string()],
+            outputs: vec!["B".to_string()],
+            attributes: HashMap::new(),
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("B"));
+        let res_w = &ir.graph.weights["B"];
+        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+        assert!((res_data - 0.0).abs() < 1e-4);
     }
 }
