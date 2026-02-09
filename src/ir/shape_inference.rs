@@ -618,6 +618,20 @@ impl ShapeInference {
                         });
                     }
                 }
+                "Constant" => {
+                    let value = match node.attributes.get("value") {
+                        Some(crate::ir::Attribute::Tensor(t)) => t,
+                        _ => return Err(OptimizerError::Error("Constant missing value attribute".to_string())),
+                    };
+
+                    value_shapes.insert(node.outputs[0].clone(), value.shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: value.shape.clone(),
+                        data_type: value.data_type.clone(),
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1316,7 +1330,35 @@ mod tests {
         ShapeInference::infer(&mut ir).unwrap();
         let y1_shape = ir.graph.outputs.iter().find(|t| t.name == "Y1").map(|t| &t.shape);
         let y2_shape = ir.graph.outputs.iter().find(|t| t.name == "Y2").map(|t| &t.shape);
-        assert_eq!(y1_shape, Some(&vec![1, 10, 10]));
-        assert_eq!(y2_shape, Some(&vec![1, 10, 10]));
-    }
-}
+                assert_eq!(y1_shape, Some(&vec![1, 10, 10]));
+                assert_eq!(y2_shape, Some(&vec![1, 10, 10]));
+            }
+        
+                #[test]
+                fn test_infer_constant_shape() {
+                    let mut ir = ModelIR::new();
+                    
+                    let mut attrs = HashMap::new();
+                    let const_tensor = Tensor {
+                        name: "val".to_string(),
+                        shape: vec![2, 2],
+                        data_type: DataType::F32,
+                        data: Some(vec![0; 16]),
+                    };
+                    attrs.insert("value".to_string(), crate::ir::Attribute::Tensor(const_tensor));
+            
+                    ir.graph.nodes.push(Node {
+                        name: "const1".to_string(),
+                        op_type: "Constant".to_string(),
+                        inputs: vec![],
+                        outputs: vec!["Y".to_string()],
+                        attributes: attrs,
+                    });
+            
+                    ShapeInference::infer(&mut ir).unwrap();
+            
+                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                    assert_eq!(y_shape, Some(&vec![2, 2]));
+                }
+            }
+            

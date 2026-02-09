@@ -80,6 +80,21 @@ impl OnnxExporter {
                         a.g = Some(Self::export_graph(g));
                         a.r#type = Some(onnx::attribute_proto::AttributeType::Graph as i32);
                     }
+                    crate::ir::Attribute::Tensor(t) => {
+                        let mut tp = onnx::TensorProto::default();
+                        tp.name = Some(t.name.clone());
+                        tp.dims = t.shape.iter().map(|&d| d as i64).collect();
+                        tp.data_type = Some(match t.data_type {
+                            crate::ir::DataType::F32 => onnx::tensor_proto::DataType::Float as i32,
+                            crate::ir::DataType::F64 => onnx::tensor_proto::DataType::Double as i32,
+                            crate::ir::DataType::I32 => onnx::tensor_proto::DataType::Int32 as i32,
+                            crate::ir::DataType::I64 => onnx::tensor_proto::DataType::Int64 as i32,
+                            crate::ir::DataType::U8 => onnx::tensor_proto::DataType::Uint8 as i32,
+                        });
+                        tp.raw_data = Some(t.data.clone().unwrap_or_default());
+                        a.t = Some(tp);
+                        a.r#type = Some(onnx::attribute_proto::AttributeType::Tensor as i32);
+                    }
                 }
                 n.attribute.push(a);
             }

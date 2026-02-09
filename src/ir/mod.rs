@@ -34,6 +34,7 @@ pub enum Attribute {
     Floats(Vec<f32>),
     Ints(Vec<i64>),
     Graph(Box<Graph>),
+    Tensor(Tensor),
 }
 
 #[derive(Debug, Clone)]
