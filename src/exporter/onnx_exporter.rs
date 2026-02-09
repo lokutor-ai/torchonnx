@@ -592,9 +592,32 @@ mod tests {
                                                                         let dir = tempdir().unwrap();
                                                                         let file_path = dir.path().join("model.onnx");
                                                                         
-                                                                        let result = OnnxExporter::export(&ir, &file_path);
-                                                                        assert!(result.is_ok());
-                                                                        assert!(file_path.exists());
-                                                                    }
-                                                                }
-                                                                
+                                                                                let result = OnnxExporter::export(&ir, &file_path);
+                                                                                assert!(result.is_ok());
+                                                                                assert!(file_path.exists());
+                                                                            }
+                                                                        
+                                                                            #[test]
+                                                                            fn test_export_cast_model() {
+                                                                                let mut ir = ModelIR::new();
+                                                                                
+                                                                                let mut attrs = HashMap::new();
+                                                                                attrs.insert("to".to_string(), crate::ir::Attribute::Int(7));
+                                                                        
+                                                                                ir.graph.nodes.push(Node {
+                                                                                    name: "cast1".to_string(),
+                                                                                    op_type: "Cast".to_string(),
+                                                                                    inputs: vec!["X".to_string()],
+                                                                                    outputs: vec!["Y".to_string()],
+                                                                                    attributes: attrs,
+                                                                                });
+                                                                        
+                                                                                let dir = tempdir().unwrap();
+                                                                                let file_path = dir.path().join("model.onnx");
+                                                                                
+                                                                                let result = OnnxExporter::export(&ir, &file_path);
+                                                                                assert!(result.is_ok());
+                                                                                assert!(file_path.exists());
+                                                                            }
+                                                                        }
+                                                                        
