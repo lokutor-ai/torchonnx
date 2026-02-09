@@ -524,9 +524,37 @@ mod tests {
                                                 let dir = tempdir().unwrap();
                                                 let file_path = dir.path().join("model.onnx");
                                                 
-                                                let result = OnnxExporter::export(&ir, &file_path);
-                                                assert!(result.is_ok());
-                                                assert!(file_path.exists());
-                                            }
-                                        }
-                                        
+                                                        let result = OnnxExporter::export(&ir, &file_path);
+                                                        assert!(result.is_ok());
+                                                        assert!(file_path.exists());
+                                                    }
+                                                
+                                                    #[test]
+                                                    fn test_export_constant_model() {
+                                                        let mut ir = ModelIR::new();
+                                                        
+                                                        let mut attrs = HashMap::new();
+                                                        attrs.insert("value".to_string(), crate::ir::Attribute::Tensor(Tensor {
+                                                            name: "val".to_string(),
+                                                            shape: vec![2, 2],
+                                                            data_type: DataType::F32,
+                                                            data: Some(vec![0; 16]),
+                                                        }));
+                                                
+                                                        ir.graph.nodes.push(Node {
+                                                            name: "const1".to_string(),
+                                                            op_type: "Constant".to_string(),
+                                                            inputs: vec![],
+                                                            outputs: vec!["Y".to_string()],
+                                                            attributes: attrs,
+                                                        });
+                                                
+                                                        let dir = tempdir().unwrap();
+                                                        let file_path = dir.path().join("model.onnx");
+                                                        
+                                                        let result = OnnxExporter::export(&ir, &file_path);
+                                                        assert!(result.is_ok());
+                                                        assert!(file_path.exists());
+                                                    }
+                                                }
+                                                
