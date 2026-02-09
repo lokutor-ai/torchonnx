@@ -679,6 +679,33 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Cast" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
+                        .clone();
+                    
+                    let to = match node.attributes.get("to") {
+                        Some(crate::ir::Attribute::Int(i)) => *i,
+                        _ => 1, // Default to float
+                    };
+
+                    let data_type = match to {
+                        1 => DataType::F32,
+                        11 => DataType::F64,
+                        6 => DataType::I32,
+                        7 => DataType::I64,
+                        2 => DataType::U8,
+                        _ => DataType::F32,
+                    };
+
+                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape,
+                        data_type,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1461,8 +1488,35 @@ mod tests {
                             
                                     ShapeInference::infer(&mut ir).unwrap();
                             
-                                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
-                                    assert_eq!(y_shape, Some(&vec![4]));
-                                }
-                            }
-                            
+                                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                            assert_eq!(y_shape, Some(&vec![4]));
+                                        }
+                                    
+                                        #[test]
+                                        fn test_infer_cast_shape() {
+                                            let mut ir = ModelIR::new();
+                                            
+                                            ir.graph.inputs.push(Tensor {
+                                                name: "X".to_string(),
+                                                shape: vec![1, 10],
+                                                data_type: DataType::F32,
+                                                data: None,
+                                            });
+                                    
+                                                    let mut attrs = HashMap::new();
+                                                    attrs.insert("to".to_string(), crate::ir::Attribute::Int(7)); // Int64
+                                                                                        ir.graph.nodes.push(Node {
+                                                name: "cast1".to_string(),
+                                                op_type: "Cast".to_string(),
+                                                inputs: vec!["X".to_string()],
+                                                outputs: vec!["Y".to_string()],
+                                                attributes: attrs,
+                                            });
+                                    
+                                            ShapeInference::infer(&mut ir).unwrap();
+                                    
+                                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                            assert_eq!(y_shape, Some(&vec![1, 10]));
+                                        }
+                                    }
+                                    
