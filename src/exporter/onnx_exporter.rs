@@ -802,9 +802,158 @@ mod tests {
                                                                                                                                 });
                                                                                                                                 let dir = tempdir().unwrap();
                                                                                                                                 let file_path = dir.path().join("model.onnx");
-                                                                                                                                let result = OnnxExporter::export(&ir, &file_path);
-                                                                                                                                assert!(result.is_ok());
-                                                                                                                                assert!(file_path.exists());
-                                                                                                                            }
-                                                                                                                        }
-                                                                                                                        
+                                                                                                                                        let result = OnnxExporter::export(&ir, &file_path);
+                                                                                                                                        assert!(result.is_ok());
+                                                                                                                                        assert!(file_path.exists());
+                                                                                                                                    }
+                                                                                                                                
+                                                                                                                                    #[test]
+                                                                                                                                    fn test_parity_prelu() {
+                                                                                                                                        let node = Node {
+                                                                                                                                            name: "prelu1".to_string(),
+                                                                                                                                            op_type: "PRelu".to_string(),
+                                                                                                                                            inputs: vec!["X".to_string(), "slope".to_string()],
+                                                                                                                                            outputs: vec!["Y".to_string()],
+                                                                                                                                            attributes: HashMap::new(),
+                                                                                                                                        };
+                                                                                                                                
+                                                                                                                                        let mut weights = HashMap::new();
+                                                                                                                                        weights.insert("slope".to_string(), Tensor {
+                                                                                                                                            name: "slope".to_string(),
+                                                                                                                                            shape: vec![2],
+                                                                                                                                            data_type: DataType::F32,
+                                                                                                                                            data: Some(vec![0, 0, 0, 63, 0, 0, 0, 63]), // [0.5, 0.5]
+                                                                                                                                        });
+                                                                                                                                
+                                                                                                                                        let mut inputs = HashMap::new();
+                                                                                                                                        inputs.insert("X".to_string(), Tensor {
+                                                                                                                                            name: "X".to_string(),
+                                                                                                                                            shape: vec![2],
+                                                                                                                                            data_type: DataType::F32,
+                                                                                                                                            data: Some(vec![0, 0, 128, 191, 0, 0, 0, 64]), // [-1.0, 2.0]
+                                                                                                                                        });
+                                                                                                                                
+                                                                                                                                        let mut expected_outputs = HashMap::new();
+                                                                                                                                        expected_outputs.insert("Y".to_string(), Tensor {
+                                                                                                                                            name: "Y".to_string(),
+                                                                                                                                            shape: vec![2],
+                                                                                                                                            data_type: DataType::F32,
+                                                                                                                                            data: Some(vec![0, 0, 0, 191, 0, 0, 0, 64]), // [-0.5, 2.0]
+                                                                                                                                        });
+                                                                                                                                
+                                                                                                                                                crate::tests::check_node_parity(node, weights, inputs, expected_outputs, 1e-5);
+                                                                                                                                            }
+                                                                                                                                        
+                                                                                                                                            #[test]
+                                                                                                                                            fn test_parity_leaky_relu() {
+                                                                                                                                                let mut attrs = HashMap::new();
+                                                                                                                                                attrs.insert("alpha".to_string(), crate::ir::Attribute::Float(0.1));
+                                                                                                                                        
+                                                                                                                                                let node = Node {
+                                                                                                                                                    name: "lrelu1".to_string(),
+                                                                                                                                                    op_type: "LeakyRelu".to_string(),
+                                                                                                                                                    inputs: vec!["X".to_string()],
+                                                                                                                                                    outputs: vec!["Y".to_string()],
+                                                                                                                                                    attributes: attrs,
+                                                                                                                                                };
+                                                                                                                                        
+                                                                                                                                                let weights = HashMap::new();
+                                                                                                                                        
+                                                                                                                                                let mut inputs = HashMap::new();
+                                                                                                                                                inputs.insert("X".to_string(), Tensor {
+                                                                                                                                                    name: "X".to_string(),
+                                                                                                                                                    shape: vec![2],
+                                                                                                                                                    data_type: DataType::F32,
+                                                                                                                                                    data: Some(vec![0, 0, 128, 191, 0, 0, 0, 64]), // [-1.0, 2.0]
+                                                                                                                                                });
+                                                                                                                                        
+                                                                                                                                                let mut expected_outputs = HashMap::new();
+                                                                                                                                                expected_outputs.insert("Y".to_string(), Tensor {
+                                                                                                                                                    name: "Y".to_string(),
+                                                                                                                                                    shape: vec![2],
+                                                                                                                                                    data_type: DataType::F32,
+                                                                                                                                                    data: Some(vec![205, 204, 204, 189, 0, 0, 0, 64]), // [-0.1, 2.0]
+                                                                                                                                                });
+                                                                                                                                        
+                                                                                                                                                        crate::tests::check_node_parity(node, weights, inputs, expected_outputs, 1e-5);
+                                                                                                                                                    }
+                                                                                                                                                
+                                                                                                                                                    #[test]
+                                                                                                                                                    fn test_parity_relu6() {
+                                                                                                                                                        let node = Node {
+                                                                                                                                                            name: "relu6_1".to_string(),
+                                                                                                                                                            op_type: "Clip".to_string(),
+                                                                                                                                                            inputs: vec!["X".to_string(), "min".to_string(), "max".to_string()],
+                                                                                                                                                            outputs: vec!["Y".to_string()],
+                                                                                                                                                            attributes: HashMap::new(),
+                                                                                                                                                        };
+                                                                                                                                                
+                                                                                                                                                        let mut weights = HashMap::new();
+                                                                                                                                                        weights.insert("min".to_string(), Tensor {
+                                                                                                                                                            name: "min".to_string(),
+                                                                                                                                                            shape: vec![1],
+                                                                                                                                                            data_type: DataType::F32,
+                                                                                                                                                            data: Some(vec![0, 0, 0, 0]), // 0.0
+                                                                                                                                                        });
+                                                                                                                                                        weights.insert("max".to_string(), Tensor {
+                                                                                                                                                            name: "max".to_string(),
+                                                                                                                                                            shape: vec![1],
+                                                                                                                                                            data_type: DataType::F32,
+                                                                                                                                                            data: Some(vec![0, 0, 192, 64]), // 6.0
+                                                                                                                                                        });
+                                                                                                                                                
+                                                                                                                                                        let mut inputs = HashMap::new();
+                                                                                                                                                        inputs.insert("X".to_string(), Tensor {
+                                                                                                                                                            name: "X".to_string(),
+                                                                                                                                                            shape: vec![3],
+                                                                                                                                                            data_type: DataType::F32,
+                                                                                                                                                            data: Some(vec![0, 0, 128, 191, 0, 0, 64, 64, 0, 0, 0, 65]), // [-1.0, 3.0, 8.0]
+                                                                                                                                                        });
+                                                                                                                                                
+                                                                                                                                                        let mut expected_outputs = HashMap::new();
+                                                                                                                                                        expected_outputs.insert("Y".to_string(), Tensor {
+                                                                                                                                                            name: "Y".to_string(),
+                                                                                                                                                            shape: vec![3],
+                                                                                                                                                            data_type: DataType::F32,
+                                                                                                                                                            data: Some(vec![0, 0, 0, 0, 0, 0, 64, 64, 0, 0, 192, 64]), // [0.0, 3.0, 6.0]
+                                                                                                                                                        });
+                                                                                                                                                
+                                                                                                                                                                crate::tests::check_node_parity(node, weights, inputs, expected_outputs, 1e-5);
+                                                                                                                                                            }
+                                                                                                                                                        
+                                                                                                                                                            #[test]
+                                                                                                                                                            fn test_parity_hard_sigmoid() {
+                                                                                                                                                                let mut attrs = HashMap::new();
+                                                                                                                                                                attrs.insert("alpha".to_string(), crate::ir::Attribute::Float(0.2));
+                                                                                                                                                                attrs.insert("beta".to_string(), crate::ir::Attribute::Float(0.5));
+                                                                                                                                                        
+                                                                                                                                                                let node = Node {
+                                                                                                                                                                    name: "hsig1".to_string(),
+                                                                                                                                                                    op_type: "HardSigmoid".to_string(),
+                                                                                                                                                                    inputs: vec!["X".to_string()],
+                                                                                                                                                                    outputs: vec!["Y".to_string()],
+                                                                                                                                                                    attributes: attrs,
+                                                                                                                                                                };
+                                                                                                                                                        
+                                                                                                                                                                let weights = HashMap::new();
+                                                                                                                                                        
+                                                                                                                                                                let mut inputs = HashMap::new();
+                                                                                                                                                                inputs.insert("X".to_string(), Tensor {
+                                                                                                                                                                    name: "X".to_string(),
+                                                                                                                                                                    shape: vec![3],
+                                                                                                                                                                    data_type: DataType::F32,
+                                                                                                                                                                    data: Some(vec![0, 0, 32, 192, 0, 0, 0, 0, 0, 0, 32, 64]), // [-2.5, 0.0, 2.5]
+                                                                                                                                                                });
+                                                                                                                                                        
+                                                                                                                                                                let mut expected_outputs = HashMap::new();
+                                                                                                                                                                expected_outputs.insert("Y".to_string(), Tensor {
+                                                                                                                                                                    name: "Y".to_string(),
+                                                                                                                                                                    shape: vec![3],
+                                                                                                                                                                    data_type: DataType::F32,
+                                                                                                                                                                    data: Some(vec![0, 0, 0, 0, 0, 0, 0, 63, 0, 0, 128, 63]), // [0.0, 0.5, 1.0]
+                                                                                                                                                                });
+                                                                                                                                                        
+                                                                                                                                                                crate::tests::check_node_parity(node, weights, inputs, expected_outputs, 1e-5);
+                                                                                                                                                            }
+                                                                                                                                                        }
+                                                                                                                                                        

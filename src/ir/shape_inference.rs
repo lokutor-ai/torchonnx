@@ -33,7 +33,7 @@ impl ShapeInference {
                         data: None,
                     });
                 }
-                "Relu" | "Sigmoid" | "Tanh" | "Erf" | "Gelu" | "Identity" | "Relu6" | "PRelu" | "LeakyRelu" | "BatchNormalization" | "InstanceNormalization" | "LayerNormalization" | "Softmax" | "Log" | "Exp" | "Clip" => {
+                "Relu" | "Sigmoid" | "Tanh" | "Erf" | "Gelu" | "Identity" | "Relu6" | "PRelu" | "LeakyRelu" | "BatchNormalization" | "InstanceNormalization" | "LayerNormalization" | "Softmax" | "Log" | "Exp" | "Clip" | "HardSigmoid" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
                         .clone();
@@ -1478,14 +1478,12 @@ mod tests {
             data_type: DataType::F32,
             data: None,
         });
-        let mut attrs = HashMap::new();
-        attrs.insert("to".to_string(), crate::ir::Attribute::Int(7));
         ir.graph.nodes.push(Node {
             name: "cast1".to_string(),
             op_type: "Cast".to_string(),
             inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
-            attributes: attrs,
+            attributes: HashMap::new(),
         });
         ShapeInference::infer(&mut ir).unwrap();
         let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
@@ -1757,6 +1755,27 @@ mod tests {
             name: "clip1".to_string(),
             op_type: "Clip".to_string(),
             inputs: vec!["X".to_string(), "min".to_string(), "max".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 512]));
+    }
+
+    #[test]
+    fn test_infer_hard_sigmoid_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 512],
+            data_type: DataType::F32,
+            data: None,
+        });
+        ir.graph.nodes.push(Node {
+            name: "hsig1".to_string(),
+            op_type: "HardSigmoid".to_string(),
+            inputs: vec!["X".to_string()],
             outputs: vec!["Y".to_string()],
             attributes: HashMap::new(),
         });
