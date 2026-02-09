@@ -398,6 +398,117 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Slice" {
+                let a = &ir.graph.weights[&node.inputs[0]];
+                let starts_tensor = &ir.graph.weights[&node.inputs[1]];
+                let ends_tensor = &ir.graph.weights[&node.inputs[2]];
+
+                if a.data_type == DataType::F32 {
+                    let mut output_shape = a.shape.clone();
+                    let axes = if node.inputs.len() > 3 {
+                        let axes_tensor = &ir.graph.weights[&node.inputs[3]];
+                        let data = axes_tensor.data.as_ref().unwrap();
+                        let mut res = Vec::new();
+                        for j in 0..axes_tensor.shape[0] {
+                            res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                        }
+                        res
+                    } else {
+                        (0..a.shape.len() as i64).collect()
+                    };
+
+                    let steps = if node.inputs.len() > 4 {
+                        let steps_tensor = &ir.graph.weights[&node.inputs[4]];
+                        let data = steps_tensor.data.as_ref().unwrap();
+                        let mut res = Vec::new();
+                        for j in 0..steps_tensor.shape[0] {
+                            res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                        }
+                        res
+                    } else {
+                        vec![1; axes.len()]
+                    };
+
+                    let starts_data = starts_tensor.data.as_ref().unwrap();
+                    let ends_data = ends_tensor.data.as_ref().unwrap();
+
+                    let mut final_starts = vec![0i64; a.shape.len()];
+                    let mut final_ends = vec![0i64; a.shape.len()];
+                    let mut final_steps = vec![1i64; a.shape.len()];
+                    for j in 0..a.shape.len() {
+                        final_ends[j] = a.shape[j] as i64;
+                    }
+
+                    for (idx, &axis) in axes.iter().enumerate() {
+                        let axis = if axis < 0 { (a.shape.len() as i64 + axis) as usize } else { axis as usize };
+                        let start = i64::from_le_bytes(starts_data[idx*8..idx*8+8].try_into().unwrap());
+                        let end = i64::from_le_bytes(ends_data[idx*8..idx*8+8].try_into().unwrap());
+                        let step = steps[idx];
+
+                        let dim_size = a.shape[axis] as i64;
+                        let start = if start < 0 { dim_size + start } else { start };
+                        let start = start.clamp(0, dim_size);
+                        let end = if end < 0 { dim_size + end } else { end };
+                        let end = end.clamp(0, dim_size);
+
+                        final_starts[axis] = start;
+                        final_ends[axis] = end;
+                        final_steps[axis] = step;
+                        output_shape[axis] = (((end - start).abs() + step.abs() - 1) / step.abs()) as usize;
+                    }
+
+                    let a_data: &[f32] = unsafe {
+                        std::slice::from_raw_parts(
+                            a.data.as_ref().unwrap().as_ptr() as *const f32,
+                            a.data.as_ref().unwrap().len() / 4,
+                        )
+                    };
+
+                    let mut total_elements = 1;
+                    for &d in &output_shape { total_elements *= d; }
+                    let mut res_data = vec![0.0f32; total_elements];
+
+                    let mut strides_a = vec![1; a.shape.len()];
+                    let mut strides_res = vec![1; output_shape.len()];
+                    for j in (0..a.shape.len() - 1).rev() {
+                        strides_a[j] = strides_a[j + 1] * a.shape[j + 1];
+                        strides_res[j] = strides_res[j + 1] * output_shape[j + 1];
+                    }
+
+                    for j in 0..total_elements {
+                        let mut remaining = j;
+                        let mut coords_res = vec![0; output_shape.len()];
+                        for k in 0..output_shape.len() {
+                            coords_res[k] = remaining / strides_res[k];
+                            remaining %= strides_res[k];
+                        }
+
+                        let mut a_idx = 0;
+                        for k in 0..a.shape.len() {
+                            let a_coord = final_starts[k] + (coords_res[k] as i64 * final_steps[k]);
+                            a_idx += a_coord as usize * strides_a[k];
+                        }
+                        res_data[j] = a_data[a_idx];
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let output_name = node.outputs[0].clone();
+                    ir.graph.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.graph.nodes.remove(i);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -751,7 +862,57 @@ mod tests {
         assert!(ir.graph.weights.contains_key("B"));
         assert_eq!(ir.graph.weights["B"].shape, vec![1, 1, 1, 1]);
         let res_w = &ir.graph.weights["B"];
-        let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
-        assert!((res_data - 2.5).abs() < 1e-4);
-    }
-}
+                let res_data: f32 = f32::from_le_bytes(res_w.data.as_ref().unwrap()[0..4].try_into().unwrap());
+                assert!((res_data - 2.5).abs() < 1e-4);
+            }
+        
+            #[test]
+            fn test_constant_folding_slice() {
+                let mut ir = ModelIR::new();
+                
+                ir.graph.weights.insert("A".to_string(), Tensor {
+                    name: "A".to_string(),
+                    shape: vec![4],
+                    data_type: DataType::F32,
+                    data: Some(vec![0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64]), // [1.0, 2.0, 3.0, 4.0]
+                });
+        
+                ir.graph.weights.insert("starts".to_string(), Tensor {
+                    name: "starts".to_string(),
+                    shape: vec![1],
+                    data_type: DataType::I64,
+                    data: Some(vec![1, 0, 0, 0, 0, 0, 0, 0]),
+                });
+        
+                ir.graph.weights.insert("ends".to_string(), Tensor {
+                    name: "ends".to_string(),
+                    shape: vec![1],
+                    data_type: DataType::I64,
+                    data: Some(vec![3, 0, 0, 0, 0, 0, 0, 0]),
+                });
+        
+                ir.graph.nodes.push(Node {
+                    name: "slice".to_string(),
+                    op_type: "Slice".to_string(),
+                    inputs: vec!["A".to_string(), "starts".to_string(), "ends".to_string()],
+                    outputs: vec!["B".to_string()],
+                    attributes: HashMap::new(),
+                });
+        
+                let folding = ConstantFolding;
+                folding.apply(&mut ir).unwrap();
+        
+                assert_eq!(ir.graph.nodes.len(), 0);
+                assert!(ir.graph.weights.contains_key("B"));
+                assert_eq!(ir.graph.weights["B"].shape, vec![2]);
+                let res_w = &ir.graph.weights["B"];
+                let res_data: Vec<f32> = unsafe {
+                    std::slice::from_raw_parts(
+                        res_w.data.as_ref().unwrap().as_ptr() as *const f32,
+                        2,
+                    ).to_vec()
+                };
+                assert_eq!(res_data, vec![2.0, 3.0]);
+            }
+        }
+        
