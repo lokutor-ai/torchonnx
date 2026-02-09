@@ -571,6 +571,68 @@ impl OptimizationPass for ConstantFolding {
                     ir.graph.nodes.remove(i);
                     continue;
                 }
+            } else if all_constants && node.op_type == "Gather" {
+                let data_tensor = &ir.graph.weights[&node.inputs[0]];
+                let indices_tensor = &ir.graph.weights[&node.inputs[1]];
+
+                if data_tensor.data_type == DataType::F32 && indices_tensor.data_type == DataType::I64 {
+                    let axis = match node.attributes.get("axis") {
+                        Some(crate::ir::Attribute::Int(ax)) => *ax,
+                        _ => 0,
+                    };
+                    let axis = if axis < 0 { (data_tensor.shape.len() as i64 + axis) as usize } else { axis as usize };
+
+                    let data_shape_val = &data_tensor.shape;
+                    let mut output_shape = Vec::new();
+                    for j in 0..axis { output_shape.push(data_shape_val[j]); }
+                    for &d in &indices_tensor.shape { output_shape.push(d); }
+                    for j in axis + 1..data_shape_val.len() { output_shape.push(data_shape_val[j]); }
+
+                    let data_ptr = data_tensor.data.as_ref().unwrap().as_ptr() as *const f32;
+                    let data_len = data_tensor.data.as_ref().unwrap().len() / 4;
+                    let data_data: &[f32] = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
+
+                    let indices_ptr = indices_tensor.data.as_ref().unwrap().as_ptr() as *const i64;
+                    let indices_len = indices_tensor.data.as_ref().unwrap().len() / 8;
+                    let indices_data: &[i64] = unsafe { std::slice::from_raw_parts(indices_ptr, indices_len) };
+
+                    let mut outer_size = 1;
+                    for j in 0..axis { outer_size *= data_shape_val[j]; }
+                    let axis_size = data_shape_val[axis];
+                    let mut inner_size = 1;
+                    for j in axis + 1..data_shape_val.len() { inner_size *= data_shape_val[j]; }
+
+                    let mut total_elements = 1;
+                    for &d in &output_shape { total_elements *= d; }
+                    let mut res_data = vec![0.0f32; total_elements];
+
+                    for outer in 0..outer_size {
+                        for (idx, &idx_val) in indices_data.iter().enumerate() {
+                            let idx_val = if idx_val < 0 { (axis_size as i64 + idx_val) as usize } else { idx_val as usize };
+                            let src_offset = (outer * axis_size + idx_val) * inner_size;
+                            let dest_offset = (outer * indices_len + idx) * inner_size;
+                            res_data[dest_offset..dest_offset + inner_size].copy_from_slice(&data_data[src_offset..src_offset + inner_size]);
+                        }
+                    }
+
+                    let res_bytes: Vec<u8> = unsafe {
+                        std::slice::from_raw_parts(
+                            res_data.as_ptr() as *const u8,
+                            res_data.len() * 4,
+                        )
+                    }.to_vec();
+
+                    let output_name = node.outputs[0].clone();
+                    ir.graph.weights.insert(output_name.clone(), Tensor {
+                        name: output_name,
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: Some(res_bytes),
+                    });
+
+                    ir.graph.nodes.remove(i);
+                    continue;
+                }
             }
             i += 1;
         }
@@ -1027,5 +1089,48 @@ mod tests {
             ).to_vec()
         };
         assert_eq!(res_data, vec![2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_constant_folding_gather() {
+        let mut ir = ModelIR::new();
+        ir.graph.weights.insert("data".to_string(), Tensor {
+            name: "data".to_string(),
+            shape: vec![3, 2],
+            data_type: DataType::F32,
+            data: Some(vec![
+                0, 0, 128, 63, 0, 0, 0, 64,
+                0, 0, 64, 64, 0, 0, 128, 64,
+                0, 0, 160, 64, 0, 0, 192, 64,
+            ]),
+        });
+        ir.graph.weights.insert("indices".to_string(), Tensor {
+            name: "indices".to_string(),
+            shape: vec![2],
+            data_type: DataType::I64,
+            data: Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]),
+        });
+        let mut attrs = HashMap::new();
+        attrs.insert("axis".to_string(), crate::ir::Attribute::Int(0));
+        ir.graph.nodes.push(Node {
+            name: "gather".to_string(),
+            op_type: "Gather".to_string(),
+            inputs: vec!["data".to_string(), "indices".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: attrs,
+        });
+        let folding = ConstantFolding;
+        folding.apply(&mut ir).unwrap();
+        assert_eq!(ir.graph.nodes.len(), 0);
+        assert!(ir.graph.weights.contains_key("Y"));
+        assert_eq!(ir.graph.weights["Y"].shape, vec![2, 2]);
+        let res_w = &ir.graph.weights["Y"];
+        let res_data: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(
+                res_w.data.as_ref().unwrap().as_ptr() as *const f32,
+                4,
+            ).to_vec()
+        };
+        assert_eq!(res_data, vec![1.0, 2.0, 5.0, 6.0]);
     }
 }
