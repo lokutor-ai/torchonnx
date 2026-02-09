@@ -240,6 +240,19 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "InstanceNormalization" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
+                        .clone();
+
+                    value_shapes.insert(node.outputs[0].clone(), shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "AveragePool" => {
                     let shape_x = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
@@ -1570,5 +1583,26 @@ mod tests {
         ShapeInference::infer(&mut ir).unwrap();
         let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
         assert_eq!(y_shape, Some(&vec![5, 1, 10]));
+    }
+
+    #[test]
+    fn test_infer_instance_norm_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 16, 112, 112],
+            data_type: DataType::F32,
+            data: None,
+        });
+        ir.graph.nodes.push(Node {
+            name: "in1".to_string(),
+            op_type: "InstanceNormalization".to_string(),
+            inputs: vec!["X".to_string(), "scale".to_string(), "B".to_string()],
+            outputs: vec!["Y".to_string()],
+            attributes: HashMap::new(),
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+        assert_eq!(y_shape, Some(&vec![1, 16, 112, 112]));
     }
 }
