@@ -578,6 +578,46 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Split" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
+                        .clone();
+                    
+                    let axis = match node.attributes.get("axis") {
+                        Some(crate::ir::Attribute::Int(ax)) => *ax as i64,
+                        _ => 0,
+                    };
+                    let axis = if axis < 0 { (shape.len() as i64 + axis) as usize } else { axis as usize };
+
+                    let split = if node.inputs.len() > 1 {
+                        let split_tensor = ir.graph.weights.get(&node.inputs[1])
+                            .ok_or_else(|| OptimizerError::Error("Split lengths must be constant for now".to_string()))?;
+                        let data = split_tensor.data.as_ref().unwrap();
+                        let mut res = Vec::new();
+                        for j in 0..split_tensor.shape[0] {
+                            res.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()) as usize);
+                        }
+                        res
+                    } else if let Some(crate::ir::Attribute::Ints(s)) = node.attributes.get("split") {
+                        s.iter().map(|&x| x as usize).collect()
+                    } else {
+                        let num_outputs = node.outputs.len();
+                        vec![shape[axis] / num_outputs; num_outputs]
+                    };
+
+                    for (i, &s) in split.iter().enumerate() {
+                        let mut output_shape = shape.clone();
+                        output_shape[axis] = s;
+                        
+                        value_shapes.insert(node.outputs[i].clone(), output_shape.clone());
+                        inferred_tensors.push(Tensor {
+                            name: node.outputs[i].clone(),
+                            shape: output_shape,
+                            data_type: DataType::F32,
+                            data: None,
+                        });
+                    }
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1252,5 +1292,31 @@ mod tests {
         ShapeInference::infer(&mut ir).unwrap();
         let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
         assert_eq!(y_shape, Some(&vec![10, 5, 7, 30]));
+    }
+
+    #[test]
+    fn test_infer_split_shape() {
+        let mut ir = ModelIR::new();
+        ir.graph.inputs.push(Tensor {
+            name: "X".to_string(),
+            shape: vec![1, 10, 20],
+            data_type: DataType::F32,
+            data: None,
+        });
+        let mut attrs = HashMap::new();
+        attrs.insert("axis".to_string(), crate::ir::Attribute::Int(2));
+        attrs.insert("num_outputs".to_string(), crate::ir::Attribute::Int(2));
+        ir.graph.nodes.push(Node {
+            name: "split1".to_string(),
+            op_type: "Split".to_string(),
+            inputs: vec!["X".to_string()],
+            outputs: vec!["Y1".to_string(), "Y2".to_string()],
+            attributes: attrs,
+        });
+        ShapeInference::infer(&mut ir).unwrap();
+        let y1_shape = ir.graph.outputs.iter().find(|t| t.name == "Y1").map(|t| &t.shape);
+        let y2_shape = ir.graph.outputs.iter().find(|t| t.name == "Y2").map(|t| &t.shape);
+        assert_eq!(y1_shape, Some(&vec![1, 10, 10]));
+        assert_eq!(y2_shape, Some(&vec![1, 10, 10]));
     }
 }
