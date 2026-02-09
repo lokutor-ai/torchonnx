@@ -520,6 +520,33 @@ impl ShapeInference {
                         data: None,
                     });
                 }
+                "Unsqueeze" => {
+                    let shape = value_shapes.get(&node.inputs[0])
+                        .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?;
+                    
+                    let axes_tensor = ir.graph.weights.get(&node.inputs[1])
+                        .ok_or_else(|| OptimizerError::Error("Unsqueeze axes must be constant for now".to_string()))?;
+                    let data = axes_tensor.data.as_ref().unwrap();
+                    let mut axes = Vec::new();
+                    for j in 0..axes_tensor.shape[0] {
+                        axes.push(i64::from_le_bytes(data[j*8..j*8+8].try_into().unwrap()));
+                    }
+
+                    let mut output_shape = shape.clone();
+                    axes.sort_unstable();
+                    for &ax in &axes {
+                        let ax = if ax < 0 { (output_shape.len() as i64 + 1 + ax) as usize } else { ax as usize };
+                        output_shape.insert(ax, 1);
+                    }
+
+                    value_shapes.insert(node.outputs[0].clone(), output_shape.clone());
+                    inferred_tensors.push(Tensor {
+                        name: node.outputs[0].clone(),
+                        shape: output_shape,
+                        data_type: DataType::F32,
+                        data: None,
+                    });
+                }
                 "Softmax" => {
                     let shape = value_shapes.get(&node.inputs[0])
                         .ok_or_else(|| OptimizerError::Error(format!("Input {} not found", node.inputs[0])))?
@@ -1768,19 +1795,295 @@ mod tests {
 
             
 
-                            let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+                                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
 
             
 
-                            assert_eq!(y_shape, Some(&vec![10, 20]));
+                    
 
             
 
-                        }
+                                    assert_eq!(y_shape, Some(&vec![10, 20]));
 
             
 
-                    }
+                    
+
+            
+
+                                }
+
+            
+
+                    
+
+            
+
+                            
+
+            
+
+                    
+
+            
+
+                                #[test]
+
+            
+
+                    
+
+            
+
+                                fn test_infer_unsqueeze_shape() {
+
+            
+
+                    
+
+            
+
+                                    let mut ir = ModelIR::new();
+
+            
+
+                    
+
+            
+
+                                    
+
+            
+
+                    
+
+            
+
+                                    ir.graph.inputs.push(Tensor {
+
+            
+
+                    
+
+            
+
+                                        name: "X".to_string(),
+
+            
+
+                    
+
+            
+
+                                        shape: vec![10, 20],
+
+            
+
+                    
+
+            
+
+                                        data_type: DataType::F32,
+
+            
+
+                    
+
+            
+
+                                        data: None,
+
+            
+
+                    
+
+            
+
+                                    });
+
+            
+
+                    
+
+            
+
+                            
+
+            
+
+                    
+
+            
+
+                                    ir.graph.weights.insert("axes".to_string(), Tensor {
+
+            
+
+                    
+
+            
+
+                                        name: "axes".to_string(),
+
+            
+
+                    
+
+            
+
+                                        shape: vec![2],
+
+            
+
+                    
+
+            
+
+                                        data_type: DataType::I64,
+
+            
+
+                    
+
+            
+
+                                        data: Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]),
+
+            
+
+                    
+
+            
+
+                                    });
+
+            
+
+                    
+
+            
+
+                            
+
+            
+
+                    
+
+            
+
+                                    ir.graph.nodes.push(Node {
+
+            
+
+                    
+
+            
+
+                                        name: "unsqueeze1".to_string(),
+
+            
+
+                    
+
+            
+
+                                        op_type: "Unsqueeze".to_string(),
+
+            
+
+                    
+
+            
+
+                                        inputs: vec!["X".to_string(), "axes".to_string()],
+
+            
+
+                    
+
+            
+
+                                        outputs: vec!["Y".to_string()],
+
+            
+
+                    
+
+            
+
+                                        attributes: HashMap::new(),
+
+            
+
+                    
+
+            
+
+                                    });
+
+            
+
+                    
+
+            
+
+                            
+
+            
+
+                    
+
+            
+
+                                    ShapeInference::infer(&mut ir).unwrap();
+
+            
+
+                    
+
+            
+
+                            
+
+            
+
+                    
+
+            
+
+                                    let y_shape = ir.graph.outputs.iter().find(|t| t.name == "Y").map(|t| &t.shape);
+
+            
+
+                    
+
+            
+
+                                    assert_eq!(y_shape, Some(&vec![1, 10, 1, 20]));
+
+            
+
+                    
+
+            
+
+                                }
+
+            
+
+                    
+
+            
+
+                            }
+
+            
+
+                    
+
+            
+
+                            
 
             
 
